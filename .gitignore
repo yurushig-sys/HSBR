@@ -13,3 +13,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+#ESP32 old version
+esp32_2024 0105(HSSBR-II)/
