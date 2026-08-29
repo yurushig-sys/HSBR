@@ -766,6 +766,7 @@ void loop() {
            <<" Ai=" << pidAngle.input
            <<" AO=" << pidAngleOutput
            <<" sp=" << avgMotSpeed
+           <<" step=" << avgMotStep
            //<<" speedIn="<<speedInput<< " " << steerInput << " " <<turnSteer
            << endl; 
       //yu
