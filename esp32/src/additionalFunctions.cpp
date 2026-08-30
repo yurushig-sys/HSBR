@@ -226,11 +226,15 @@ void parseCommand_z(char* data, uint8_t length){
       if (pn == 2){
         speedInput = atof(param[0]);
         steerInput = atof(param[1]);
+        Serial << "speedInput=" << speedInput 
+               << " steerInput=" << steerInput 
+               << endl;
       }
       else {
         Serial << "parameter number error, n=" << pn << endl;
       }
       break;
+
 
     case 'u' :       //stand up or fall down
       if (atoi(data+2) == 1 && standupControl == 0){
