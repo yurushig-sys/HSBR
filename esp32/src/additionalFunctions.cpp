@@ -221,6 +221,16 @@ void parseCommand_z(char* data, uint8_t length){
       speedInput, tempSpeedIn = 0, 0;
       steerInput = 0; 
       break;
+    
+    case 'j' :        // joystick control from Raspberry Pi
+      if (pn == 2){
+        speedInput = atof(param[0]);
+        steerInput = atof(param[1]);
+      }
+      else {
+        Serial << "parameter number error, n=" << pn << endl;
+      }
+      break;
 
     case 'u' :       //stand up or fall down
       if (atoi(data+2) == 1 && standupControl == 0){
