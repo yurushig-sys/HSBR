@@ -765,12 +765,13 @@ void loop() {
            //<<" As=" << pidAngle.setpoint
            //<<" Ai=" << pidAngle.input
            //<<" AO=" << pidAngleOutput
-           //<<" sp=" << avgMotSpeed
+           <<" sp=" << avgMotSpeed
+           <<" ms=" <<  (motLeftStep + motRightStep) / 2
            //<<" step=" << avgMotStep
            //<<" pidSin=" <<pidSpeed.input
            //<<" pidSo" <<pidSpeedOutput
-           << " AS=" << pidAngle.setpoint
-           << " AO=" << pidAngleOutput
+           //<< " AS=" << pidAngle.setpoint
+           //<< " AO=" << pidAngleOutput
            //<<" speedIn="<<speedInput<< " " << steerInput << " " <<turnSteer
            << endl; 
       //yu
