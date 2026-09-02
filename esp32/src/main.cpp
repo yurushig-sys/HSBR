@@ -754,21 +754,18 @@ void loop() {
 
       if (logena == 1 && enableControl == 1){ 
         Serial  << controlMode  
-           //<< ": Tlp=" << Tlp
-           //<< " Tlp=" << Tlp
-           //<< " lp=" << lp
-           //<< " dtGx=" << deltaGx*100
-           //<< " acc=" << accAngle
-           << " fAng="  << filterAngle
-           //<< " aS=" << avgSpeed
-           //<< " aMS=" << avgMotStep/1000.0
-           <<" As=" << pidAngle.setpoint
-           <<" Ai=" << pidAngle.input
-           <<" AO=" << pidAngleOutput
-           <<" sp=" << avgMotSpeed
-           <<" step=" << avgMotStep
-           //<<" speedIn="<<speedInput<< " " << steerInput << " " <<turnSteer
-           << endl; 
+          << " fAng="  << filterAngle
+          << " As="    << pidAngle.setpoint
+          << " Ai="    << pidAngle.input
+          << " AO="    << pidAngleOutput
+          << " sp="    << avgMotSpeed
+          << " step="  << avgMotStep
+          << " sIn="   << speedInput
+          << " avgSp=" << avgSpeed
+          << " Sset="  << pidSpeed.setpoint
+          << " Sin="   << pidSpeed.input
+          << " Sout="  << pidSpeedOutput
+          << endl;
       //yu
         /*Serial <<"Tlp="<<abs(Tlp)<<" lp="<<abs(lp)
              <<" Tth="<<Ttheta<<" th="<<theta
