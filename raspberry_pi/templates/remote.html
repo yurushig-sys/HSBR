@@ -1,0 +1,662 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>HSBR Remote</title>
+
+<style>
+  * {
+    box-sizing: border-box;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  html, body {
+    margin: 0;
+    width: 100%;
+    min-height: 100%;
+    background: #15171b;
+    color: #f3f4f6;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overscroll-behavior: none;
+  }
+
+  body {
+    padding: 12px;
+  }
+
+  .app {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+
+  h1 {
+    font-size: 22px;
+    margin: 0;
+    white-space: nowrap;
+  }
+
+  .status {
+    min-width: 150px;
+    text-align: right;
+    font-size: 14px;
+  }
+
+  .status.ok {
+    color: #8ee6a5;
+  }
+
+  .status.ng {
+    color: #ff9a9a;
+  }
+
+  .values {
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    margin: 4px 0 10px;
+    font-variant-numeric: tabular-nums;
+    font-size: 18px;
+  }
+
+  .control-row {
+    display: grid;
+    grid-template-columns: 1fr 220px 1fr;
+    align-items: center;
+    gap: 22px;
+  }
+
+  .joy-wrap {
+    text-align: center;
+  }
+
+  .joy-title {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .joy-sub {
+    font-size: 13px;
+    opacity: 0.75;
+    margin-top: 7px;
+  }
+
+  .joystick {
+    position: relative;
+    width: min(36vw, 330px);
+    height: min(36vw, 330px);
+    min-width: 190px;
+    min-height: 190px;
+    margin: 0 auto;
+    border: 3px solid #6b7280;
+    border-radius: 50%;
+    background:
+      linear-gradient(transparent 49.5%, #4b5563 49.5%, #4b5563 50.5%, transparent 50.5%),
+      linear-gradient(90deg, transparent 49.5%, #4b5563 49.5%, #4b5563 50.5%, transparent 50.5%),
+      #22262d;
+    touch-action: none;
+  }
+
+  .joystick::after {
+    content: "";
+    position: absolute;
+    inset: 21%;
+    border: 1px dashed #555c66;
+    border-radius: 50%;
+    pointer-events: none;
+  }
+
+  .knob {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 76px;
+    height: 76px;
+    margin-left: -38px;
+    margin-top: -38px;
+    border-radius: 50%;
+    background: #d4d7dc;
+    border: 3px solid #ffffff;
+    box-shadow: 0 5px 18px rgba(0,0,0,.35);
+    transform: translate(0px, 0px);
+    pointer-events: none;
+  }
+
+  .buttons {
+    display: grid;
+    gap: 12px;
+  }
+
+  button {
+    border: 0;
+    border-radius: 14px;
+    padding: 18px 10px;
+    font-size: 18px;
+    font-weight: 800;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  button:active {
+    transform: scale(0.98);
+  }
+
+  .stand-up {
+    background: #3c8f57;
+    color: white;
+  }
+
+  .stand-down {
+    background: #d1842f;
+    color: white;
+  }
+
+  .stop {
+    background: #d43838;
+    color: white;
+    font-size: 22px;
+    padding: 24px 10px;
+  }
+
+  .hint {
+    margin-top: 10px;
+    text-align: center;
+    font-size: 13px;
+    color: #adb3bd;
+  }
+
+  .rx {
+    margin-top: 7px;
+    text-align: center;
+    font-size: 12px;
+    color: #8f96a3;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  @media (max-width: 760px) {
+    body {
+      padding: 8px;
+    }
+
+    .control-row {
+      grid-template-columns: 1fr 120px 1fr;
+      gap: 8px;
+    }
+
+    .joystick {
+      width: min(34vw, 250px);
+      height: min(34vw, 250px);
+      min-width: 145px;
+      min-height: 145px;
+    }
+
+    .knob {
+      width: 62px;
+      height: 62px;
+      margin-left: -31px;
+      margin-top: -31px;
+    }
+
+    button {
+      font-size: 14px;
+      padding: 14px 5px;
+    }
+
+    .stop {
+      font-size: 17px;
+      padding: 19px 5px;
+    }
+
+    .joy-title {
+      font-size: 15px;
+    }
+
+    .joy-sub {
+      font-size: 11px;
+    }
+  }
+
+  @media (orientation: portrait) and (max-width: 760px) {
+    .control-row {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .buttons {
+      grid-column: 1 / -1;
+      grid-template-columns: 1fr 1fr 1fr;
+      order: 3;
+    }
+
+    .joystick {
+      width: 42vw;
+      height: 42vw;
+    }
+  }
+</style>
+</head>
+
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <h1>HSBR Remote</h1>
+    <div id="status" class="status ng">Serial: checking...</div>
+  </div>
+
+  <div class="values">
+    <div>Speed: <strong id="speedValue">0</strong></div>
+    <div>Steer: <strong id="steerValue">0</strong></div>
+  </div>
+
+  <div class="control-row">
+
+    <div class="joy-wrap">
+      <div class="joy-title">SPEED</div>
+      <div id="speedJoy" class="joystick">
+        <div id="speedKnob" class="knob"></div>
+      </div>
+      <div class="joy-sub">UP = +20 / DOWN = -20</div>
+    </div>
+
+    <div class="buttons">
+      <button id="standUp" class="stand-up">Stand Up</button>
+      <button id="standDown" class="stand-down">Stand Down</button>
+      <button id="stop" class="stop">STOP</button>
+    </div>
+
+    <div class="joy-wrap">
+      <div class="joy-title">STEER</div>
+      <div id="steerJoy" class="joystick">
+        <div id="steerKnob" class="knob"></div>
+      </div>
+      <div class="joy-sub">LEFT / RIGHT = ±15</div>
+    </div>
+
+  </div>
+
+  <div class="hint">
+    Releasing either joystick returns that axis to zero.
+  </div>
+
+  <div id="rx" class="rx"></div>
+</div>
+
+<script>
+"use strict";
+
+/*
+ * Initial safe limits for testing.
+ * Change these two values later if needed.
+ */
+const MAX_SPEED = 20;
+const MAX_STEER = 15;
+const DEADZONE = 0.06;
+
+/*
+ * Send at most 20 drive commands/sec.
+ * The ESP32 receives one short command:
+ *   zj <speed> <steer>
+ */
+const SEND_INTERVAL_MS = 50;
+
+let desiredSpeed = 0;
+let desiredSteer = 0;
+
+let lastSentSpeed = null;
+let lastSentSteer = null;
+let sendBusy = false;
+let sendQueued = false;
+
+
+function round1(v) {
+  return Math.round(v * 10) / 10;
+}
+
+
+function updateValueDisplay() {
+  document.getElementById("speedValue").textContent =
+    desiredSpeed.toFixed(1);
+
+  document.getElementById("steerValue").textContent =
+    desiredSteer.toFixed(1);
+}
+
+
+async function sendDrive(force=false) {
+  const speed = round1(desiredSpeed);
+  const steer = round1(desiredSteer);
+
+  if (!force &&
+      speed === lastSentSpeed &&
+      steer === lastSentSteer) {
+    return;
+  }
+
+  if (sendBusy) {
+    sendQueued = true;
+    return;
+  }
+
+  sendBusy = true;
+
+  try {
+    const response = await fetch("/api/drive", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        speed: speed,
+        steer: steer
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error("drive request failed");
+    }
+
+    lastSentSpeed = speed;
+    lastSentSteer = steer;
+
+  } catch (err) {
+    setStatus(false, "Serial/API error");
+  } finally {
+    sendBusy = false;
+
+    if (sendQueued) {
+      sendQueued = false;
+      sendDrive(true);
+    }
+  }
+}
+
+
+async function action(name) {
+  /*
+   * Recenter browser-side command values first.
+   * Server also zeros drive before Stand Up/Down.
+   */
+  desiredSpeed = 0;
+  desiredSteer = 0;
+
+  speedJoystick.center();
+  steerJoystick.center();
+  updateValueDisplay();
+
+  try {
+    const response = await fetch("/api/action", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: name})
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "action failed");
+    }
+
+    lastSentSpeed = 0;
+    lastSentSteer = 0;
+
+  } catch (err) {
+    setStatus(false, "Action error");
+  }
+}
+
+
+function setStatus(ok, text) {
+  const el = document.getElementById("status");
+  el.textContent = text;
+  el.className = ok ? "status ok" : "status ng";
+}
+
+
+async function pollStatus() {
+  try {
+    const response = await fetch("/api/status", {cache: "no-store"});
+    const s = await response.json();
+
+    if (s.serial_open) {
+      setStatus(true, "Serial: " + s.serial_port);
+    } else {
+      setStatus(false, "Serial: disconnected");
+    }
+
+    const rx = document.getElementById("rx");
+    if (s.last_rx) {
+      rx.textContent = "ESP32: " + s.last_rx;
+    } else if (s.last_error) {
+      rx.textContent = s.last_error;
+    }
+
+  } catch (err) {
+    setStatus(false, "Pi Web: disconnected");
+  }
+}
+
+
+class OneAxisJoystick {
+  constructor(padId, knobId, axis, onValue) {
+    this.pad = document.getElementById(padId);
+    this.knob = document.getElementById(knobId);
+    this.axis = axis;       // "vertical" or "horizontal"
+    this.onValue = onValue; // normalized -1 ... +1
+    this.pointerId = null;
+
+    this.pad.addEventListener("pointerdown",
+                              (e) => this.pointerDown(e));
+
+    this.pad.addEventListener("pointermove",
+                              (e) => this.pointerMove(e));
+
+    this.pad.addEventListener("pointerup",
+                              (e) => this.pointerUp(e));
+
+    this.pad.addEventListener("pointercancel",
+                              (e) => this.pointerUp(e));
+
+    this.pad.addEventListener("lostpointercapture",
+                              () => this.release());
+  }
+
+  geometry() {
+    const rect = this.pad.getBoundingClientRect();
+
+    const knobRadius = this.knob.offsetWidth / 2;
+    const radius = Math.max(
+      1,
+      Math.min(rect.width, rect.height) / 2 - knobRadius - 7
+    );
+
+    return {
+      rect: rect,
+      cx: rect.left + rect.width / 2,
+      cy: rect.top + rect.height / 2,
+      radius: radius
+    };
+  }
+
+  pointerDown(e) {
+    e.preventDefault();
+
+    this.pointerId = e.pointerId;
+    this.pad.setPointerCapture(e.pointerId);
+    this.updateFromPointer(e);
+  }
+
+  pointerMove(e) {
+    if (e.pointerId !== this.pointerId) {
+      return;
+    }
+
+    e.preventDefault();
+    this.updateFromPointer(e);
+  }
+
+  pointerUp(e) {
+    if (e.pointerId !== this.pointerId) {
+      return;
+    }
+
+    e.preventDefault();
+
+    try {
+      this.pad.releasePointerCapture(e.pointerId);
+    } catch (_) {
+    }
+
+    this.release();
+  }
+
+  updateFromPointer(e) {
+    const g = this.geometry();
+
+    let dx = e.clientX - g.cx;
+    let dy = e.clientY - g.cy;
+
+    if (this.axis === "vertical") {
+      dx = 0;
+
+      let n = -dy / g.radius;  // up = positive speed
+      n = Math.max(-1, Math.min(1, n));
+
+      if (Math.abs(n) < DEADZONE) {
+        n = 0;
+      }
+
+      const knobY = -n * g.radius;
+      this.knob.style.transform =
+        "translate(0px, " + knobY.toFixed(1) + "px)";
+
+      this.onValue(n);
+
+    } else {
+      dy = 0;
+
+      let n = dx / g.radius;   // right = positive steer
+      n = Math.max(-1, Math.min(1, n));
+
+      if (Math.abs(n) < DEADZONE) {
+        n = 0;
+      }
+
+      const knobX = n * g.radius;
+      this.knob.style.transform =
+        "translate(" + knobX.toFixed(1) + "px, 0px)";
+
+      this.onValue(n);
+    }
+  }
+
+  release() {
+    this.pointerId = null;
+    this.center();
+    this.onValue(0);
+    updateValueDisplay();
+
+    /*
+     * Do not wait for the 50 ms timer when the operator lets go.
+     * Zero that axis immediately.
+     */
+    sendDrive(true);
+  }
+
+  center() {
+    this.knob.style.transform = "translate(0px, 0px)";
+  }
+}
+
+
+const speedJoystick = new OneAxisJoystick(
+  "speedJoy",
+  "speedKnob",
+  "vertical",
+  function(n) {
+    desiredSpeed = n * MAX_SPEED;
+    updateValueDisplay();
+  }
+);
+
+
+const steerJoystick = new OneAxisJoystick(
+  "steerJoy",
+  "steerKnob",
+  "horizontal",
+  function(n) {
+    desiredSteer = n * MAX_STEER;
+    updateValueDisplay();
+  }
+);
+
+
+document.getElementById("standUp").addEventListener(
+  "click",
+  () => action("stand_up")
+);
+
+document.getElementById("standDown").addEventListener(
+  "click",
+  () => action("stand_down")
+);
+
+document.getElementById("stop").addEventListener(
+  "click",
+  () => action("stop")
+);
+
+
+/*
+ * Regular joystick transmitter.
+ */
+setInterval(() => {
+  sendDrive(false);
+}, SEND_INTERVAL_MS);
+
+
+/*
+ * Serial/Web status.
+ */
+pollStatus();
+setInterval(pollStatus, 1000);
+
+
+/*
+ * Best-effort STOP if the page is hidden/closed.
+ * The dedicated red STOP button remains the primary operator stop.
+ */
+function emergencyPageStop() {
+  desiredSpeed = 0;
+  desiredSteer = 0;
+
+  try {
+    const blob = new Blob(
+      [JSON.stringify({action: "stop"})],
+      {type: "application/json"}
+    );
+    navigator.sendBeacon("/api/action", blob);
+  } catch (_) {
+  }
+}
+
+window.addEventListener("pagehide", emergencyPageStop);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    emergencyPageStop();
+  }
+});
+</script>
+
+</body>
+</html>
