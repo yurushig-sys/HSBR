@@ -567,10 +567,14 @@ class OneAxisJoystick {
     updateValueDisplay();
 
     /*
-     * Do not wait for the 50 ms timer when the operator lets go.
-     * Zero that axis immediately.
-     */
-    sendDrive(true);
+     * 両方のジョイスティックが中央なら STOP 相当
+     * 片方がまだ操作中なら通常の zj コマンドを送る
+    */
+    if (desiredSpeed === 0 && desiredSteer === 0) {
+      action("stop");
+    } else {
+      sendDrive(true);
+    }
   }
 
   center() {
