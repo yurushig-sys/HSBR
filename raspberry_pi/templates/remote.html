@@ -169,6 +169,42 @@
     padding: 24px 10px;
   }
 
+  .log-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  .log-button {
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+
+  .log-start {
+    background: #3b82f6;
+    color: white;
+  }
+
+  .log-stop {
+    background: #6b7280;
+    color: white;
+  }
+
+  .log-state {
+    min-width: 150px;
+    font-size: 13px;
+    color: #adb3bd;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .log-state.on {
+    color: #8ee6a5;
+    font-weight: 700;
+  }
+
   .hint {
     margin-top: 10px;
     text-align: center;
@@ -287,8 +323,14 @@
 
   </div>
 
+  <div class="log-controls">
+    <button id="logStart" class="log-button log-start">Log Start</button>
+    <button id="logStop" class="log-button log-stop">Log Stop</button>
+    <div id="logState" class="log-state">Log: OFF</div>
+  </div>
+
   <div class="hint">
-    Releasing either joystick returns that axis to zero.
+    Releasing the final active joystick sends STOP.
   </div>
 
   <div id="rx" class="rx"></div>
@@ -416,6 +458,41 @@ async function action(name) {
 }
 
 
+async function logAction(name) {
+  try {
+    const response = await fetch("/api/log", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: name})
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "log action failed");
+    }
+
+    updateLogState(result.logging, result.log_path || "");
+  } catch (err) {
+    const el = document.getElementById("logState");
+    el.textContent = "Log: ERROR";
+    el.className = "log-state";
+  }
+}
+
+
+function updateLogState(logging, path) {
+  const el = document.getElementById("logState");
+  if (logging) {
+    const name = path ? path.split("/").pop() : "recording";
+    el.textContent = "Log: ON  " + name;
+    el.className = "log-state on";
+  } else {
+    el.textContent = "Log: OFF";
+    el.className = "log-state";
+  }
+}
+
+
 function setStatus(ok, text) {
   const el = document.getElementById("status");
   el.textContent = text;
@@ -440,6 +517,8 @@ async function pollStatus() {
     } else if (s.last_error) {
       rx.textContent = s.last_error;
     }
+
+    updateLogState(Boolean(s.logging), s.log_path || "");
 
   } catch (err) {
     setStatus(false, "Pi Web: disconnected");
@@ -567,9 +646,11 @@ class OneAxisJoystick {
     updateValueDisplay();
 
     /*
-     * 両方のジョイスティックが中央なら STOP 相当
-     * 片方がまだ操作中なら通常の zj コマンドを送る
-    */
+     * If both axes are now zero, make release equivalent to STOP:
+     *   zj 0 0
+     *   zh
+     * If the other joystick is still active, keep normal drive control.
+     */
     if (desiredSpeed === 0 && desiredSteer === 0) {
       action("stop");
     } else {
@@ -618,6 +699,16 @@ document.getElementById("standDown").addEventListener(
 document.getElementById("stop").addEventListener(
   "click",
   () => action("stop")
+);
+
+document.getElementById("logStart").addEventListener(
+  "click",
+  () => logAction("start")
+);
+
+document.getElementById("logStop").addEventListener(
+  "click",
+  () => logAction("stop")
 );
 
 
