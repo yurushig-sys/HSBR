@@ -315,9 +315,11 @@ def api_log():
     try:
         if action == "start":
             path = link.start_log()
+            link.send("ze1")
             return jsonify(ok=True, logging=True, log_path=path)
 
         if action == "stop":
+            link.send("ze0")
             path = link.stop_log()
             return jsonify(ok=True, logging=False, log_path=path)
 
