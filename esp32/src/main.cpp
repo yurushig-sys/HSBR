@@ -530,6 +530,7 @@ void loop() {
       //yu//if (tNowMs-lastInputTime>2000 && controlMode == 2) {
       if (tNowMs-lastInputTime>100 && controlMode == 2) {
         controlMode = 1;  
+        avgMotSpeedSum = 0; //+20260906
         motLeft.setStep(0);
         motRight.setStep(0);
         lastMotLeftStep = 0;    //+ yu
