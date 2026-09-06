@@ -762,9 +762,9 @@ void loop() {
            << " fAng="  << filterAngle
            << " aS=" << avgSpeed
            //<< " aMS=" << avgMotStep/1000.0
-           //<<" As=" << pidAngle.setpoint
+           <<" As=" << pidAngle.setpoint
            //<<" Ai=" << pidAngle.input
-           //<<" AO=" << pidAngleOutput
+           <<" AO=" << pidAngleOutput
            <<" sp=" << avgMotSpeed
            <<" ms=" <<  (motLeftStep + motRightStep) / 2
            //<<" step=" << avgMotStep
