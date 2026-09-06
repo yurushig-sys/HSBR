@@ -760,7 +760,7 @@ void loop() {
            //<< " Tlp=" << Tlp
            //<< " lp=" << lp
            //<< " dtGx=" << deltaGx*100
-           //<< " acc=" << accAngle
+           << " acc=" << accAngle
            << " fAng="  << filterAngle
            << " aS=" << avgSpeed
            //<< " aMS=" << avgMotStep/1000.0
