@@ -512,6 +512,7 @@ void loop() {
             motRight.setStep(0);
             lastMotLeftStep = 0;    //+ yu
             lastMotRightStep = 0;   //+ yu
+            avgMotSpeedSum = 0; //+20260906
             pidSpeed.reset();
           }
         }
