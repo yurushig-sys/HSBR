@@ -318,7 +318,7 @@
       <div id="steerJoy" class="joystick">
         <div id="steerKnob" class="knob"></div>
       </div>
-      <div class="joy-sub">LEFT / RIGHT = ±15</div>
+      <div class="joy-sub">LEFT / RIGHT = ±30</div> //+-15 -> +-30 へ変更　20260907
     </div>
 
   </div>
@@ -343,8 +343,8 @@
  * Initial safe limits for testing.
  * Change these two values later if needed.
  */
-const MAX_SPEED = 50;
-const MAX_STEER = 15;
+const MAX_SPEED = 50; //20 -> 50 へ変更　20260906
+const MAX_STEER = 30; //15 -> 30 へ変更　20260907
 const DEADZONE = 0.06;
 
 /*
