@@ -28,7 +28,7 @@ SERIAL_BAUD = int(os.environ.get("HSBR_BAUD", "115200"))
 # Server-side safety limits.
 # The browser UI uses smaller limits by default.
 SERVER_MAX_SPEED = 50.0
-SERVER_MAX_STEER = 30.0
+SERVER_MAX_STEER = 50.0
 
 WEB_HOST = "0.0.0.0"
 WEB_PORT = int(os.environ.get("HSBR_WEB_PORT", "8080"))
