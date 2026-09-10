@@ -130,6 +130,7 @@ float gyroGain = 1.0;
 float gyroCompensate = 0.0;  //+ yu compensating value for gyro Z
 float deltaGx;  //+ yu
 float gyroFilter = 0.9;
+float deltaGyroAngle = 0.0;  //+ yu
 
 // -- Others
 //#define ledPin 2            //yu  schematic shows GPIO2 is STEP for Right Motor
@@ -1045,7 +1046,7 @@ void calculateGyroOffset(uint8_t nSample) {
 
 void readSensor() {
   int16_t ax, ay, az, gx, gy, gz, gxRow;
-  float deltaGyroAngle;
+  //float deltaGyroAngle;
   extern int continuousFlag, rotateFlag;  
   imu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
   //if (logena == 1){

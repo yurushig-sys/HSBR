@@ -133,6 +133,7 @@ void init_servo_motors(){
 
 //intermittent Log out
 extern float avgBatteryVoltage;
+extern float deltaGyroAngle;
 #define battLowPin 18 
 
 void intermittentLogout(){
@@ -142,7 +143,11 @@ void intermittentLogout(){
     if (digitalRead(battLowPin) == 0){
       Serial << "BATTERY LOW: " ;
     }
-    Serial << "Battery Voltage =" << avgBatteryVoltage << endl; 
+    Serial << "Battery Voltage =" << avgBatteryVoltage 
+    << " AccAngle =" << accAngle
+    << " DeltaGAngle =" << deltaGyroAngle
+    << " FilterAngle =" << filterAngle
+    << endl; 
   }
 }
 
