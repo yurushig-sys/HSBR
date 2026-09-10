@@ -139,7 +139,7 @@ extern float deltaGyroAngle;
 void intermittentLogout(){
   static int intervalTimer;
   intervalTimer += 1;
-  if ((intervalTimer % 20000) == 0){  //5ms * 2000 = 10sec
+  if ((intervalTimer % 2000) == 0){  //5ms * 2000 = 10sec
     if (digitalRead(battLowPin) == 0){
       Serial << "BATTERY LOW: " ;
     }
