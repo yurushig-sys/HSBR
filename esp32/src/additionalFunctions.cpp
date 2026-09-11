@@ -143,10 +143,10 @@ void intermittentLogout(){
     if (digitalRead(battLowPin) == 0){
       Serial << "BATTERY LOW: " ;
     }
-    Serial << "Battery Voltage =" << avgBatteryVoltage 
-    << " AccAngle =" << accAngle
-    << " DeltaGAngle =" << deltaGyroAngle
-    << " FilterAngle =" << filterAngle
+    Serial << "Battery Voltage=" << avgBatteryVoltage 
+    << " AccAngle=" << accAngle
+    << " DeltaGAnglex100=" << deltaGyroAngle * 100
+    << " FilterAngle=" << filterAngle
     << endl; 
   }
 }
