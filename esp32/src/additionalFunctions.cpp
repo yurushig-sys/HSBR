@@ -10,6 +10,7 @@
 #include <PID.h>
 #include "additionalFunctions.h"
 #include <fastStepper.h>
+#include <MPU6050.h>
 
 extern Preferences preferences;
 extern PID pidAngle, pidPos, pidSpeed;
@@ -134,19 +135,22 @@ void init_servo_motors(){
 //intermittent Log out
 extern float avgBatteryVoltage;
 extern float deltaGyroAngle;
+extern MPU6050 imu;
 #define battLowPin 18 
 
 void intermittentLogout(){
   static int intervalTimer;
+  float impuTemp = imu.getTemperature() / 340.0 + 36.53;
   intervalTimer += 1;
   if ((intervalTimer % 2000) == 0){  //5ms * 2000 = 10sec
     if (digitalRead(battLowPin) == 0){
       Serial << "BATTERY LOW: " ;
     }
-    Serial << "Battery Voltage=" << avgBatteryVoltage 
-    << " AccAngle=" << accAngle
-    << " DeltaGAnglex100=" << deltaGyroAngle * 100
-    << " FilterAngle=" << filterAngle
+    Serial << "Battery Voltage =" << avgBatteryVoltage 
+    << " Temp =" << impuTemp
+    << " AccAngle =" << accAngle
+    << " DeltaGAnglex100 =" << deltaGyroAngle * 100
+    << " FilterAngle =" << filterAngle
     << endl; 
   }
 }
