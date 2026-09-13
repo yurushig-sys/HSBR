@@ -281,6 +281,24 @@
       height: 42vw;
     }
   }
+
+    .system-controls {
+    margin-top: 28px;
+    padding-top: 16px;
+    border-top: 1px solid #3f454d;
+    text-align: center;
+  }
+
+  .shutdown-button {
+    padding: 9px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    background: #4b5563;
+    color: white;
+    border: 1px solid #777;
+    border-radius: 8px;
+  }
+
 </style>
 </head>
 
@@ -334,6 +352,11 @@
   </div>
 
   <div id="rx" class="rx"></div>
+
+  <div class="system-controls">
+    <button id="shutdownPi" class="shutdown-button">
+      Shutdown Pi
+    </button>
 </div>
 
 <script>
@@ -711,6 +734,45 @@ document.getElementById("logStop").addEventListener(
   () => logAction("stop")
 );
 
+document.getElementById("shutdownPi").addEventListener(
+  "click",
+  async () => {
+    const ok = window.confirm(
+      "Raspberry Piをシャットダウンします。\n\n" +
+      "HSBRの制御も停止します。\n" +
+      "本当にシャットダウンしますか？"
+    );
+
+    if (!ok) {
+      return;
+    }
+
+    const button = document.getElementById("shutdownPi");
+    button.disabled = true;
+    button.textContent = "Shutting down...";
+
+    try {
+      const response = await fetch("/api/shutdown", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({confirm: "shutdown"})
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || "shutdown failed");
+      }
+
+      setStatus(false, "Pi: shutting down...");
+
+    } catch (err) {
+      button.disabled = false;
+      button.textContent = "Shutdown Pi";
+      setStatus(false, "Shutdown error");
+    }
+  }
+);
 
 /*
  * Regular joystick transmitter.

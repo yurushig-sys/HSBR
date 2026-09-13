@@ -20,7 +20,7 @@ import time
 
 from flask import Flask, jsonify, render_template, request
 import serial
-
+import subprocess   
 
 SERIAL_PORT = os.environ.get("HSBR_SERIAL", "/dev/ttyUSB0")
 SERIAL_BAUD = int(os.environ.get("HSBR_BAUD", "115200"))
@@ -328,6 +328,47 @@ def api_log():
     except Exception as exc:
         return jsonify(ok=False, error=str(exc)), 500
 
+@app.route("/api/shutdown", methods=["POST"])
+def api_shutdown():
+    data = request.get_json(silent=True) or {}
+
+    # Browser側の確認だけに頼らず、サーバ側でも確認する
+    if data.get("confirm") != "shutdown":
+        return jsonify(ok=False, error="confirmation required"), 400
+
+    def do_shutdown():
+        # HTTP応答をブラウザへ返す時間を確保
+        time.sleep(1.0)
+
+        # ESP32を安全側へ
+        try:
+            link.send_many([
+                "zj 0 0",
+                "zh",
+                "zu0"
+            ])
+        except Exception:
+            pass
+
+        # ログが動いていれば閉じる
+        try:
+            link.stop_log()
+        except Exception:
+            pass
+
+        time.sleep(1.0)
+
+        # Raspberry Pi shutdown
+        subprocess.Popen([
+            "sudo", "-n",
+            "/sbin/shutdown", "-h", "now"
+        ])
+
+    t = threading.Thread(target=do_shutdown, name="pi-shutdown")
+    t.daemon = True
+    t.start()
+
+    return jsonify(ok=True)
 
 @app.route("/api/status")
 def api_status():
