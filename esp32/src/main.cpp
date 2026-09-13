@@ -125,7 +125,8 @@ float filterAngle = 0;
 float angleOffset = 0;
 float angleOffset2 = 0;  //+yu
 extern int faceUp, faceDown;
-float gyroFilterConstant = 0.999; //0.996->0.999 20260907
+float gyroFilterConstant = 0.998; //0.996->0.999 20260907
+                                  //0.999->0.998 20260913
 float gyroGain = 1.0;
 float gyroCompensate = 0.0;  //+ yu compensating value for gyro Z
 float deltaGx;  //+ yu
