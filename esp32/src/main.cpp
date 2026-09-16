@@ -132,6 +132,11 @@ float gyroCompensate = 0.0;  //+ yu compensating value for gyro Z
 float deltaGx;  //+ yu
 float gyroFilter = 0.9;
 float deltaGyroAngle = 0.0;  //+ yu
+// -- gyro temperature compensation //yu+
+float gyroTempSlope   = 0.125f;  // [deg/s / degC]
+float gyroTempRef     = 0.0f; //42.5f;   // [degC]
+float gyroTempBiasMin = -1.40f;  // [deg/s]
+float gyroTempBiasMax = 0.00f;   // [deg/s]
 
 // -- Others
 //#define ledPin 2            //yu  schematic shows GPIO2 is STEP for Right Motor
@@ -301,6 +306,25 @@ void setup() {
   else if(boardNumber == 2) gyroCompensate = 0.033;  //0.033 for #2 PCB
   */
   Serial << "gyro compensating value = " << gyroCompensate << endl;
+
+  // Read gyro temperature compensation parameters  yu+
+  gyroTempSlope =
+      preferences.getFloat("gyroTempSlope", 0.125f);
+
+  gyroTempRef =
+      preferences.getFloat("gyroTempRef", 42.5f);
+
+  gyroTempBiasMin =
+      preferences.getFloat("gyroBiasMin", -1.40f);
+
+  gyroTempBiasMax =
+      preferences.getFloat("gyroBiasMax", 0.00f);
+
+  Serial << "gyroTempSlope   = " << gyroTempSlope << endl;
+  Serial << "gyroTempRef     = " << gyroTempRef << endl;
+  Serial << "gyroTempBiasMin = " << gyroTempBiasMin << endl;
+  Serial << "gyroTempBiasMax = " << gyroTempBiasMax << endl;
+  //yu+
 
   // Read gyro offsets
   Serial << "Gyro calibration values: ";
@@ -956,6 +980,49 @@ void parseCommand(char* data, uint8_t length) {
       case 'n':
         gyroFilterConstant = atof(&data[1]);
         break;
+
+      case 'q': {   // gyro temperature compensation settings
+        char cmd2 = data[1];
+        float val = atof(data + 2);
+
+        switch (cmd2) {
+
+          case 's':   // slope
+              gyroTempSlope = val;
+              preferences.putFloat(
+                  "gyroTempSlope", gyroTempSlope);
+              Serial << "gyroTempSlope = "
+                     << gyroTempSlope << endl;
+              break;
+
+          case 'r':   // reference temperature
+              gyroTempRef = val;
+              preferences.putFloat(
+                  "gyroTempRef", gyroTempRef);
+              Serial << "gyroTempRef = "
+                     << gyroTempRef << endl;
+              break;
+
+          case 'l':   // bias lower limit
+              gyroTempBiasMin = val;
+              preferences.putFloat(
+                  "gyroBiasMin", gyroTempBiasMin);
+              Serial << "gyroTempBiasMin = "
+                     << gyroTempBiasMin << endl;
+              break;
+
+          case 'h':   // bias upper limit
+              gyroTempBiasMax = val;
+              preferences.putFloat(
+                  "gyroBiasMax", gyroTempBiasMax);
+              Serial << "gyroTempBiasMax = "
+                     << gyroTempBiasMax << endl;
+              break;
+        }
+
+        break;
+      }
+
       case 'w': {
         char cmd2 = data[1];
         char buf[63];
@@ -1083,13 +1150,16 @@ void readSensor() {
   float gyroRate =
       (float)(gx - gyroOffset[0]) / GYRO_SENSITIVITY;
 
-  // White HSBR provisional temperature compensation
-  // Bias becomes approximately zero around 42.5 degC.
-  float tempBiasDps = 0.125f * (imuTemp - 42.5f);
+  // Gyro temperature compensation
+  float tempBiasDps =
+      gyroTempSlope * (imuTemp - gyroTempRef);
 
   // Limit compensation outside measured range
-  if (tempBiasDps < -1.40f) tempBiasDps = -1.40f;
-  if (tempBiasDps >  0.00f) tempBiasDps =  0.00f;
+  if (tempBiasDps < gyroTempBiasMin)
+     tempBiasDps = gyroTempBiasMin;
+
+  if (tempBiasDps > gyroTempBiasMax)
+     tempBiasDps = gyroTempBiasMax;
 
   float gyroRateCorrected = gyroRate - tempBiasDps;
 
