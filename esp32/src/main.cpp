@@ -1048,8 +1048,22 @@ void calculateGyroOffset(uint8_t nSample) {
 void readSensor() {
   int16_t ax, ay, az, gx, gy, gz, gxRow;
   //float deltaGyroAngle;
+  
+  // +yu temperature compensation
+  static float imuTemp = 42.5f;
+  static unsigned long lastTempRead = 0;
+
   extern int continuousFlag, rotateFlag;  
   imu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
+ 
+  // +yu MPU6050 temperature: update once per second
+  unsigned long nowMs = millis();
+
+  if (lastTempRead == 0 || nowMs - lastTempRead >= 1000) {
+    imuTemp = imu.getTemperature() / 340.0f + 36.53f;
+    lastTempRead = nowMs;
+  }
+ 
   //if (logena == 1){
   //  Serial.printf("%5d %5d %5d %5d %5d %5d\n", ax, ay, az, gx, gy, gz);
   //}
@@ -1064,7 +1078,25 @@ void readSensor() {
   //if (accAngle > 90.0) accAngle -=360; //yu for HSSBR-II
   //accAngle += 90.0; //+yu for HSSBR-II
   accAngle += angleOffset2; //+ yu
-  deltaGyroAngle = ((float)((gx - gyroOffset[0])) / GYRO_SENSITIVITY) * dT * gyroGain;
+  //deltaGyroAngle = ((float)((gx - gyroOffset[0])) / GYRO_SENSITIVITY) * dT * gyroGain;
+  //< +yu gyro temperature compensation
+  float gyroRate =
+      (float)(gx - gyroOffset[0]) / GYRO_SENSITIVITY;
+
+  // White HSBR provisional temperature compensation
+  // Bias becomes approximately zero around 42.5 degC.
+  float tempBiasDps = 0.125f * (imuTemp - 42.5f);
+
+  // Limit compensation outside measured range
+  if (tempBiasDps < -1.40f) tempBiasDps = -1.40f;
+  if (tempBiasDps >  0.00f) tempBiasDps =  0.00f;
+
+  float gyroRateCorrected = gyroRate - tempBiasDps;
+
+  deltaGyroAngle =
+      gyroRateCorrected * dT * gyroGain;
+  //+yu gyro temperature compensation>
+
   filterAngle = gyroFilterConstant * (filterAngle + deltaGyroAngle) + (1 - gyroFilterConstant) * (accAngle);
   /*
   if (continuousFlag == 1 || rotateFlag == 1){
