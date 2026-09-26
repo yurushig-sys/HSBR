@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport"
@@ -58,6 +58,38 @@
 
   .status.ng {
     color: #ff9a9a;
+  }
+
+  .tab-bar {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 14px;
+    padding: 4px;
+    background: #22262d;
+    border: 1px solid #3f454d;
+    border-radius: 14px;
+  }
+
+  .tab-button {
+    padding: 11px 12px;
+    border-radius: 10px;
+    background: transparent;
+    color: #adb3bd;
+    font-size: 16px;
+  }
+
+  .tab-button.active {
+    background: #3b82f6;
+    color: #ffffff;
+  }
+
+  .tab-panel {
+    display: none;
+  }
+
+  .tab-panel.active {
+    display: block;
   }
 
   .values {
@@ -282,21 +314,63 @@
     }
   }
 
-    .system-controls {
-    margin-top: 28px;
-    padding-top: 16px;
-    border-top: 1px solid #3f454d;
-    text-align: center;
+  .app-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .app-card {
+    min-height: 220px;
+    padding: 20px;
+    border: 1px solid #3f454d;
+    border-radius: 16px;
+    background: #22262d;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .app-card h2 {
+    margin: 0;
+    font-size: 22px;
+  }
+
+  .app-card p {
+    margin: 0;
+    color: #c2c7d0;
+    line-height: 1.6;
+  }
+
+  .app-card .app-action {
+    width: 100%;
+    margin-top: auto;
+  }
+
+  .app-state {
+    align-self: flex-start;
+    padding: 5px 10px;
+    border-radius: 999px;
+    background: #3b414a;
+    color: #d5d8dd;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .field-hockey-button {
+    background: #2f6d48;
+    color: white;
+  }
+
+  .field-hockey-button:disabled {
+    background: #3b4148;
+    color: #8f96a3;
+    cursor: not-allowed;
   }
 
   .shutdown-button {
-    padding: 9px 18px;
-    font-size: 13px;
-    font-weight: 600;
-    background: #4b5563;
+    background: #8f3434;
     color: white;
-    border: 1px solid #777;
-    border-radius: 8px;
   }
 
   .camera-section {
@@ -316,6 +390,16 @@
     border-radius: 8px;
   }
 
+  @media (max-width: 640px) {
+    .app-list {
+      grid-template-columns: 1fr;
+    }
+
+    .app-card {
+      min-height: 190px;
+    }
+  }
+
 </style>
 </head>
 
@@ -326,6 +410,33 @@
     <h1>HSBR Remote</h1>
     <div id="status" class="status ng">Serial: checking...</div>
   </div>
+
+  <div class="tab-bar" role="tablist" aria-label="HSBR画面選択">
+    <button
+      id="remoteTab"
+      class="tab-button active"
+      type="button"
+      role="tab"
+      aria-selected="true"
+      aria-controls="remotePanel">
+      リモコン
+    </button>
+    <button
+      id="appsTab"
+      class="tab-button"
+      type="button"
+      role="tab"
+      aria-selected="false"
+      aria-controls="appsPanel">
+      アプリ
+    </button>
+  </div>
+
+  <section
+    id="remotePanel"
+    class="tab-panel active"
+    role="tabpanel"
+    aria-labelledby="remoteTab">
 
   <div class="values">
     <div>Speed: <strong id="speedValue">0</strong></div>
@@ -370,18 +481,54 @@
 
   <div id="rx" class="rx"></div>
 
-  <div class="system-controls">
-    <button id="shutdownPi" class="shutdown-button">
-      Shutdown Pi
-    </button>
-  </div>
-
   <div class="camera-section">
     <img
       class="camera-view"
       src="/video_feed"
       alt="HSBR Camera">
   </div>
+
+  </section>
+
+  <section
+    id="appsPanel"
+    class="tab-panel"
+    role="tabpanel"
+    aria-labelledby="appsTab"
+    hidden>
+    <div class="app-list">
+      <article class="app-card">
+        <div class="app-state">準備中</div>
+        <h2>フィールドホッケー</h2>
+        <p>
+          赤いボールと緑のゴールを検出し、ボールの後方へ回り込んで
+          ゴールに向けて自動でヒットします。
+        </p>
+        <button
+          id="fieldHockeyStart"
+          class="app-action field-hockey-button"
+          type="button"
+          disabled>
+          開発中
+        </button>
+      </article>
+
+      <article class="app-card">
+        <div class="app-state">システム</div>
+        <h2>Raspberry Pi終了</h2>
+        <p>
+          HSBRの移動を停止して倒伏させた後、Raspberry Piを安全に
+          シャットダウンします。
+        </p>
+        <button
+          id="shutdownPi"
+          class="app-action shutdown-button"
+          type="button">
+          シャットダウン
+        </button>
+      </article>
+    </div>
+  </section>
 
 </div>
 
@@ -410,6 +557,29 @@ let lastSentSpeed = null;
 let lastSentSteer = null;
 let sendBusy = false;
 let sendQueued = false;
+
+
+function showTab(name) {
+  const showRemote = name === "remote";
+  const remoteTab = document.getElementById("remoteTab");
+  const appsTab = document.getElementById("appsTab");
+  const remotePanel = document.getElementById("remotePanel");
+  const appsPanel = document.getElementById("appsPanel");
+
+  remoteTab.classList.toggle("active", showRemote);
+  appsTab.classList.toggle("active", !showRemote);
+  remoteTab.setAttribute("aria-selected", String(showRemote));
+  appsTab.setAttribute("aria-selected", String(!showRemote));
+
+  remotePanel.classList.toggle("active", showRemote);
+  appsPanel.classList.toggle("active", !showRemote);
+  remotePanel.hidden = !showRemote;
+  appsPanel.hidden = showRemote;
+
+  if (!showRemote) {
+    action("stop");
+  }
+}
 
 
 function round1(v) {
@@ -760,6 +930,16 @@ document.getElementById("logStop").addEventListener(
   () => logAction("stop")
 );
 
+document.getElementById("remoteTab").addEventListener(
+  "click",
+  () => showTab("remote")
+);
+
+document.getElementById("appsTab").addEventListener(
+  "click",
+  () => showTab("apps")
+);
+
 document.getElementById("shutdownPi").addEventListener(
   "click",
   async () => {
@@ -794,7 +974,7 @@ document.getElementById("shutdownPi").addEventListener(
 
     } catch (err) {
       button.disabled = false;
-      button.textContent = "Shutdown Pi";
+      button.textContent = "シャットダウン";
       setStatus(false, "Shutdown error");
     }
   }
