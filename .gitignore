@@ -19,3 +19,6 @@ esp32_2024 0105(HSSBR-II)/
 
 # Raspberry Pi virtual environment
 raspberry_pi/.venv-camera/
+
+# Local logs, videos and notes
+/shared/
