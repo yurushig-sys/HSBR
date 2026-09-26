@@ -422,6 +422,8 @@
     color: #c2c7d0;
     font-size: 13px;
     font-variant-numeric: tabular-nums;
+    white-space: pre-line;
+    line-height: 1.55;
   }
 
   .target-status.found {
@@ -678,11 +680,32 @@ function formatTargetStatus(name, target) {
     return name + "：未検出";
   }
 
-  return name + "：検出  " +
-    "x=" + target.x + "  " +
-    "y=" + target.y + "  " +
-    "面積=" + Number(target.area).toFixed(0) + "  " +
-    "角度=" + Number(target.bearing_deg).toFixed(1) + "°";
+  const bearing = Number(target.bearing_deg);
+  let direction = "正面";
+  if (bearing >= 0.5) {
+    direction = "左 " + bearing.toFixed(1) + "°";
+  } else if (bearing <= -0.5) {
+    direction = "右 " + Math.abs(bearing).toFixed(1) + "°";
+  }
+
+  let distance = "未校正";
+  let coordinates = "未校正";
+  if (target.distance_mm !== null && target.distance_mm !== undefined) {
+    distance = Number(target.distance_mm).toFixed(0) + " mm";
+  }
+  if (target.robot_x_mm !== null && target.robot_y_mm !== null &&
+      target.robot_x_mm !== undefined && target.robot_y_mm !== undefined) {
+    coordinates = "X=" + Number(target.robot_x_mm).toFixed(0) +
+      " mm  Y=" + Number(target.robot_y_mm).toFixed(0) + " mm";
+  }
+
+  return name + "：検出" +
+    "\n距離：" + distance +
+    "　方向：" + direction +
+    "\n座標：" + coordinates +
+    "\n調整用：画像x=" + target.x +
+    "  y=" + target.y +
+    "  面積=" + Number(target.area).toFixed(0);
 }
 
 

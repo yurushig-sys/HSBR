@@ -3,6 +3,7 @@
 Python 3.7 compatible.  This module never sends motion commands.
 """
 
+import math
 import threading
 import time
 
@@ -11,7 +12,10 @@ import numpy as np
 
 
 class FieldHockeyDetector(object):
-    HORIZONTAL_FOV_DEG = 48.0
+    # Provisional calibration from five measurements at X=500 mm.
+    # cx is the optical centre and fx is the horizontal focal length in pixels.
+    CAMERA_CX_PX = 320.0
+    CAMERA_FX_PX = 525.0
 
     def __init__(self, min_area_ratio=0.0001):
         self.min_area_ratio = min_area_ratio
@@ -33,7 +37,11 @@ class FieldHockeyDetector(object):
             "x": None,
             "y": None,
             "area": 0.0,
-            "bearing_deg": None
+            "bearing_deg": None,
+            # Filled after vertical-distance calibration.
+            "distance_mm": None,
+            "robot_x_mm": None,
+            "robot_y_mm": None
         }
 
     @staticmethod
@@ -64,17 +72,21 @@ class FieldHockeyDetector(object):
 
         x = int(moments["m10"] / moments["m00"])
         y = int(moments["m01"] / moments["m00"])
-        bearing = ((width / 2.0 - x) / (width / 2.0)) * (
-            self.HORIZONTAL_FOV_DEG / 2.0
-        )
+        # Positive is left.  atan is used instead of a linear FOV conversion.
+        scale = width / 640.0
+        camera_cx = self.CAMERA_CX_PX * scale
+        camera_fx = self.CAMERA_FX_PX * scale
+        bearing = math.degrees(math.atan((camera_cx - x) / camera_fx))
 
         target = {
             "found": True,
             "x": x,
             "y": y,
             "area": round(area, 1),
-            # Positive is left, matching the 2021 field-hockey program.
-            "bearing_deg": round(float(bearing), 1)
+            "bearing_deg": round(float(bearing), 1),
+            "distance_mm": None,
+            "robot_x_mm": None,
+            "robot_y_mm": None
         }
         return target, contour
 
@@ -108,11 +120,8 @@ class FieldHockeyDetector(object):
             18,
             2
         )
-        text = "{} x={} y={} a={:.0f} th={:+.1f}".format(
+        text = "{} th={:+.1f}deg".format(
             label,
-            target["x"],
-            target["y"],
-            target["area"],
             target["bearing_deg"]
         )
         cv2.putText(
