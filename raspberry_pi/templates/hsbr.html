@@ -368,6 +368,67 @@
     cursor: not-allowed;
   }
 
+  .detection-panel {
+    margin-top: 16px;
+    padding: 16px;
+    border: 1px solid #3f454d;
+    border-radius: 16px;
+    background: #22262d;
+  }
+
+  .detection-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .detection-header h2 {
+    margin: 0;
+    font-size: 20px;
+  }
+
+  .detection-close {
+    padding: 8px 14px;
+    border-radius: 9px;
+    background: #59616d;
+    color: white;
+    font-size: 13px;
+  }
+
+  .detection-view {
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    height: auto;
+    margin: 0 auto;
+    border-radius: 10px;
+    background: #000;
+  }
+
+  .detection-status {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    max-width: 640px;
+    margin: 12px auto 0;
+  }
+
+  .target-status {
+    padding: 10px;
+    border-radius: 10px;
+    background: #181b20;
+    color: #c2c7d0;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .target-status.found {
+    color: #ffffff;
+    border: 1px solid #4b5563;
+  }
+
   .shutdown-button {
     background: #8f3434;
     color: white;
@@ -390,13 +451,17 @@
     border-radius: 8px;
   }
 
-  @media (max-width: 640px) {
+  @media (max-width: 900px) {
     .app-list {
       grid-template-columns: 1fr;
     }
 
     .app-card {
       min-height: 190px;
+    }
+
+    .detection-status {
+      grid-template-columns: 1fr;
     }
   }
 
@@ -498,7 +563,7 @@
     hidden>
     <div class="app-list">
       <article class="app-card">
-        <div class="app-state">準備中</div>
+        <div class="app-state">検出テスト</div>
         <h2>フィールドホッケー</h2>
         <p>
           赤いボールと緑のゴールを検出し、ボールの後方へ回り込んで
@@ -507,9 +572,8 @@
         <button
           id="fieldHockeyStart"
           class="app-action field-hockey-button"
-          type="button"
-          disabled>
-          開発中
+          type="button">
+          検出モードを開く
         </button>
       </article>
 
@@ -527,6 +591,30 @@
           シャットダウン
         </button>
       </article>
+    </div>
+
+    <div id="fieldHockeyPanel" class="detection-panel" hidden>
+      <div class="detection-header">
+        <h2>赤ボール／緑ゴール検出</h2>
+        <button id="fieldHockeyClose" class="detection-close" type="button">
+          閉じる
+        </button>
+      </div>
+      <img
+        id="fieldHockeyView"
+        class="detection-view"
+        alt="フィールドホッケー検出映像">
+      <div class="detection-status">
+        <div id="redTargetStatus" class="target-status">
+          赤ボール：待機中
+        </div>
+        <div id="greenTargetStatus" class="target-status">
+          緑ゴール：待機中
+        </div>
+      </div>
+      <div class="hint">
+        検出のみを行います。HSBRへ移動・旋回・打撃命令は送りません。
+      </div>
     </div>
   </section>
 
@@ -557,6 +645,7 @@ let lastSentSpeed = null;
 let lastSentSteer = null;
 let sendBusy = false;
 let sendQueued = false;
+let fieldHockeyStatusTimer = null;
 
 
 function showTab(name) {
@@ -578,6 +667,82 @@ function showTab(name) {
 
   if (!showRemote) {
     action("stop");
+  } else {
+    closeFieldHockeyDetection();
+  }
+}
+
+
+function formatTargetStatus(name, target) {
+  if (!target || !target.found) {
+    return name + "：未検出";
+  }
+
+  return name + "：検出  " +
+    "x=" + target.x + "  " +
+    "y=" + target.y + "  " +
+    "面積=" + Number(target.area).toFixed(0) + "  " +
+    "角度=" + Number(target.bearing_deg).toFixed(1) + "°";
+}
+
+
+async function pollFieldHockeyStatus() {
+  try {
+    const response = await fetch(
+      "/api/apps/field-hockey/status",
+      {cache: "no-store"}
+    );
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error("detection status failed");
+    }
+
+    const red = document.getElementById("redTargetStatus");
+    const green = document.getElementById("greenTargetStatus");
+    red.textContent = formatTargetStatus("赤ボール", result.red);
+    green.textContent = formatTargetStatus("緑ゴール", result.green);
+    red.classList.toggle("found", Boolean(result.red && result.red.found));
+    green.classList.toggle(
+      "found",
+      Boolean(result.green && result.green.found)
+    );
+  } catch (err) {
+    document.getElementById("redTargetStatus").textContent =
+      "検出状態を取得できません";
+  }
+}
+
+
+function openFieldHockeyDetection() {
+  const panel = document.getElementById("fieldHockeyPanel");
+  const view = document.getElementById("fieldHockeyView");
+  const button = document.getElementById("fieldHockeyStart");
+
+  panel.hidden = false;
+  view.src = "/field_hockey_feed?t=" + Date.now();
+  button.textContent = "検出中";
+
+  pollFieldHockeyStatus();
+  if (fieldHockeyStatusTimer === null) {
+    fieldHockeyStatusTimer = setInterval(pollFieldHockeyStatus, 500);
+  }
+
+  panel.scrollIntoView({behavior: "smooth", block: "start"});
+}
+
+
+function closeFieldHockeyDetection() {
+  const panel = document.getElementById("fieldHockeyPanel");
+  const view = document.getElementById("fieldHockeyView");
+  const button = document.getElementById("fieldHockeyStart");
+
+  panel.hidden = true;
+  view.removeAttribute("src");
+  button.textContent = "検出モードを開く";
+
+  if (fieldHockeyStatusTimer !== null) {
+    clearInterval(fieldHockeyStatusTimer);
+    fieldHockeyStatusTimer = null;
   }
 }
 
@@ -938,6 +1103,16 @@ document.getElementById("remoteTab").addEventListener(
 document.getElementById("appsTab").addEventListener(
   "click",
   () => showTab("apps")
+);
+
+document.getElementById("fieldHockeyStart").addEventListener(
+  "click",
+  openFieldHockeyDetection
+);
+
+document.getElementById("fieldHockeyClose").addEventListener(
+  "click",
+  closeFieldHockeyDetection
 );
 
 document.getElementById("shutdownPi").addEventListener(

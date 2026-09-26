@@ -21,8 +21,10 @@ import time
 #from flask import Flask, jsonify, render_template, request
 from flask import Flask, Response, jsonify, render_template, request
 from hsbr.camera_manager import CameraManager
+from hsbr.field_hockey import FieldHockeyDetector
+import cv2
 import serial
-import subprocess   
+import subprocess
 
 SERIAL_PORT = os.environ.get("HSBR_SERIAL", "/dev/ttyUSB0")
 SERIAL_BAUD = int(os.environ.get("HSBR_BAUD", "115200"))
@@ -240,6 +242,8 @@ camera = CameraManager(
 )
 camera.start()
 
+field_hockey = FieldHockeyDetector()
+
 link = ESP32Link(SERIAL_PORT, SERIAL_BAUD)
 
 current_speed = 0.0
@@ -279,6 +283,45 @@ def video_feed():
         generate_mjpeg(),
         mimetype="multipart/x-mixed-replace; boundary=frame"
     )
+
+
+def generate_field_hockey_mjpeg():
+    """Detection-only stream; no motion commands are sent here."""
+    while True:
+        frame = camera.get_frame()
+        if frame is None:
+            time.sleep(0.05)
+            continue
+
+        annotated = field_hockey.process(frame)
+        ok, encoded = cv2.imencode(
+            ".jpg",
+            annotated,
+            [int(cv2.IMWRITE_JPEG_QUALITY), 75]
+        )
+        if ok:
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + encoded.tobytes()
+                + b"\r\n"
+            )
+
+        # Keep the initial detector load modest on Raspberry Pi 4.
+        time.sleep(0.1)
+
+
+@app.route("/field_hockey_feed")
+def field_hockey_feed():
+    return Response(
+        generate_field_hockey_mjpeg(),
+        mimetype="multipart/x-mixed-replace; boundary=frame"
+    )
+
+
+@app.route("/api/apps/field-hockey/status")
+def api_field_hockey_status():
+    return jsonify(field_hockey.get_status())
 
 
 @app.route("/camera")
