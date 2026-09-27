@@ -539,6 +539,19 @@
     font-size: 12px;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+  }
+
+  .command-console-copy-row {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 8px;
+  }
+
+  .command-console-copy-row button {
+    background: #586171;
   }
 
   .shutdown-button {
@@ -730,6 +743,11 @@
         </div>
         <div id="fieldHockeyCommandResult" class="command-console-result">
           自動動作を停止してから使用してください。
+        </div>
+        <div class="command-console-copy-row">
+          <button id="fieldHockeyCommandCopy" type="button">
+            受信データをコピー
+          </button>
         </div>
       </div>
       <div class="detection-status">
@@ -955,6 +973,48 @@ async function sendFieldHockeyCommand() {
     input.select();
   } catch (err) {
     resultBox.textContent = "送信エラー：" + err.message;
+  }
+}
+
+
+async function copyFieldHockeyCommandResult() {
+  const resultBox = document.getElementById("fieldHockeyCommandResult");
+  const copyButton = document.getElementById("fieldHockeyCommandCopy");
+  const text = resultBox.textContent.trim();
+
+  if (!text) {
+    copyButton.textContent = "コピー対象なし";
+    return;
+  }
+
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const temporary = document.createElement("textarea");
+      temporary.value = text;
+      temporary.setAttribute("readonly", "");
+      temporary.style.position = "fixed";
+      temporary.style.left = "-9999px";
+      temporary.style.top = "0";
+      document.body.appendChild(temporary);
+      temporary.focus();
+      temporary.select();
+      temporary.setSelectionRange(0, temporary.value.length);
+
+      if (!document.execCommand("copy")) {
+        throw new Error("copy failed");
+      }
+
+      document.body.removeChild(temporary);
+    }
+
+    copyButton.textContent = "コピーしました";
+    setTimeout(() => {
+      copyButton.textContent = "受信データをコピー";
+    }, 1500);
+  } catch (err) {
+    copyButton.textContent = "文字を選択してコピー";
   }
 }
 
@@ -1416,6 +1476,11 @@ document.getElementById("fieldHockeyAutoStop").addEventListener(
 document.getElementById("fieldHockeyCommandSend").addEventListener(
   "click",
   sendFieldHockeyCommand
+);
+
+document.getElementById("fieldHockeyCommandCopy").addEventListener(
+  "click",
+  copyFieldHockeyCommandResult
 );
 
 document.getElementById("fieldHockeyCommandInput").addEventListener(
