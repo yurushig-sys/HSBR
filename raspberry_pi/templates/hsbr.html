@@ -615,7 +615,8 @@
         </div>
       </div>
       <div class="hint">
-        検出のみを行います。HSBRへ移動・旋回・打撃命令は送りません。
+        距離・座標は暫定校正値です（X＝正面、Y＝左がプラス）。
+        検出のみを行い、HSBRへ移動・旋回・打撃命令は送りません。
       </div>
     </div>
   </section>
@@ -688,21 +689,22 @@ function formatTargetStatus(name, target) {
     direction = "右 " + Math.abs(bearing).toFixed(1) + "°";
   }
 
-  let distance = "未校正";
-  let coordinates = "未校正";
+  let distance = "算出不可";
+  let coordinates = "算出不可";
   if (target.distance_mm !== null && target.distance_mm !== undefined) {
     distance = Number(target.distance_mm).toFixed(0) + " mm";
   }
   if (target.robot_x_mm !== null && target.robot_y_mm !== null &&
       target.robot_x_mm !== undefined && target.robot_y_mm !== undefined) {
+    const robotY = Number(target.robot_y_mm);
     coordinates = "X=" + Number(target.robot_x_mm).toFixed(0) +
-      " mm  Y=" + Number(target.robot_y_mm).toFixed(0) + " mm";
+      " mm  Y=" + (robotY >= 0 ? "+" : "") + robotY.toFixed(0) + " mm";
   }
 
   return name + "：検出" +
-    "\n距離：" + distance +
+    "\n距離（暫定）：" + distance +
     "　方向：" + direction +
-    "\n座標：" + coordinates +
+    "\n座標（暫定）：" + coordinates +
     "\n調整用：画像x=" + target.x +
     "  y=" + target.y +
     "  面積=" + Number(target.area).toFixed(0);

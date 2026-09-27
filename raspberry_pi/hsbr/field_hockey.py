@@ -17,6 +17,15 @@ class FieldHockeyDetector(object):
     CAMERA_CX_PX = 320.0
     CAMERA_FX_PX = 525.0
 
+    # Provisional vertical-distance calibration.  These values are used for
+    # display only and must not yet be used to issue motion commands.
+    CAMERA_CY_PX = 240.0
+    CAMERA_FY_PX = 779.0
+    CAMERA_HEIGHT_MM = 170.0
+    CAMERA_DOWN_PITCH_DEG = 6.83
+    BALL_CENTER_HEIGHT_MM = 60.0
+    GOAL_HEIGHT_MM = 0.0
+
     def __init__(self, min_area_ratio=0.0001):
         self.min_area_ratio = min_area_ratio
         self.lock = threading.Lock()
@@ -50,7 +59,7 @@ class FieldHockeyDetector(object):
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-    def _find_largest(self, mask, width, height):
+    def _find_largest(self, mask, width, height, target_height_mm):
         result = cv2.findContours(
             mask,
             cv2.RETR_EXTERNAL,
@@ -78,15 +87,40 @@ class FieldHockeyDetector(object):
         camera_fx = self.CAMERA_FX_PX * scale
         bearing = math.degrees(math.atan((camera_cx - x) / camera_fx))
 
+        vertical_scale = height / 480.0
+        camera_cy = self.CAMERA_CY_PX * vertical_scale
+        camera_fy = self.CAMERA_FY_PX * vertical_scale
+        down_angle = math.radians(self.CAMERA_DOWN_PITCH_DEG) + math.atan(
+            (y - camera_cy) / camera_fy
+        )
+
+        distance_mm = None
+        robot_x_mm = None
+        robot_y_mm = None
+        height_difference = self.CAMERA_HEIGHT_MM - target_height_mm
+        if down_angle > math.radians(0.5) and height_difference > 0:
+            robot_x_mm = height_difference / math.tan(down_angle)
+            robot_y_mm = robot_x_mm * math.tan(math.radians(bearing))
+            distance_mm = math.hypot(robot_x_mm, robot_y_mm)
+
         target = {
             "found": True,
             "x": x,
             "y": y,
             "area": round(area, 1),
             "bearing_deg": round(float(bearing), 1),
-            "distance_mm": None,
-            "robot_x_mm": None,
-            "robot_y_mm": None
+            "distance_mm": (
+                round(float(distance_mm), 1)
+                if distance_mm is not None else None
+            ),
+            "robot_x_mm": (
+                round(float(robot_x_mm), 1)
+                if robot_x_mm is not None else None
+            ),
+            "robot_y_mm": (
+                round(float(robot_y_mm), 1)
+                if robot_y_mm is not None else None
+            )
         }
         return target, contour
 
@@ -161,11 +195,17 @@ class FieldHockeyDetector(object):
         )
         green_mask = self._clean_mask(green_mask)
 
-        red, red_contour = self._find_largest(red_mask, width, height)
+        red, red_contour = self._find_largest(
+            red_mask,
+            width,
+            height,
+            self.BALL_CENTER_HEIGHT_MM
+        )
         green, green_contour = self._find_largest(
             green_mask,
             width,
-            height
+            height,
+            self.GOAL_HEIGHT_MM
         )
 
         cv2.line(output, (width // 2, 0), (width // 2, height), (210, 210, 210), 1)
