@@ -505,14 +505,16 @@ void odometry(float avgspeed){
     }
     else if (moveFlag == 3){
       //if (continuousFlag == 0){
-        //if (Tlp > 0){
-        //  if (pError > 0) speedInput = tempSpeedIn * 1.2; //breaking;
-        //  else moveFlag = 4;
-        //}
-        //else {
-          if (pError < 0) speedInput = tempSpeedIn * 0.5; //breaking;
-          else moveFlag = 4;
-        //}
+      if (Tlp > 0){
+        // 前進：目標を通過するまでは半速
+        if (pError > 0) speedInput = tempSpeedIn * 0.5; //breaking;
+        else moveFlag = 4;
+      }
+      else {
+        // 後退：目標を通過するまでは半速
+        if (pError < 0) speedInput = tempSpeedIn * 0.5; //breaking;
+        else moveFlag = 4;
+      }
       //}
       //else moveFlag = 4;
     }
