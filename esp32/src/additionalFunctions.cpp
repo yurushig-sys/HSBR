@@ -227,7 +227,8 @@ void parseCommand_z(char* data, uint8_t length){
       turnFlag = 0;
       turnFlag2 = 0;
       continuousFlag = 0;
-      speedInput, tempSpeedIn = 0, 0;
+      speedInput = 0;
+      tempSpeedIn = 0;
       steerInput = 0; 
       break;
     
@@ -518,21 +519,16 @@ void odometry(float avgspeed){
       //}
       //else moveFlag = 4;
     }
-    else if (moveFlag ==4){
-        if (continuousFlag == 0) {
-          if (speedInput > 0) speedInput -= 10;
-          else {speedInput = 0;
-            tempSpeedIn = 0;
-            moveFlag = 0;
-          }
-        }
-        else {
-          moveFlag = 0;
-        }
-        //speedInput = 0;
-        //tempSpeedIn = 0;
-        //moveFlag = 0;
+    else if (moveFlag == 4){
+      if (continuousFlag == 0) {
+        speedInput = 0;
+        tempSpeedIn = 0;
+        moveFlag = 0;
       }
+      else {
+        moveFlag = 0;
+      }
+    }
     /* -----? */ 
     Serial <<"mF="<<moveFlag<<" pEr="<<pError
            <<" spIn="<<speedInput
