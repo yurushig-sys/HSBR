@@ -24,7 +24,11 @@ class FieldHockeyDetector(object):
     CAMERA_HEIGHT_MM = 170.0
     CAMERA_DOWN_PITCH_DEG = 6.83
     BALL_CENTER_HEIGHT_MM = 60.0
-    GOAL_HEIGHT_MM = 0.0
+    GOAL_HEIGHT_MM = 10.0
+
+    # Geometry inherited from the 2021 field-hockey route calculation.
+    STICK_RIGHT_OFFSET_MM = 100.0
+    ORBIT_RADIUS_MM = 200.0
 
     def __init__(self, min_area_ratio=0.0001):
         self.min_area_ratio = min_area_ratio
@@ -36,7 +40,8 @@ class FieldHockeyDetector(object):
             "frame_width": 0,
             "frame_height": 0,
             "red": self._empty_target(),
-            "green": self._empty_target()
+            "green": self._empty_target(),
+            "route": self._empty_route("ボールまたはゴールを待っています")
         }
 
     @staticmethod
@@ -51,6 +56,137 @@ class FieldHockeyDetector(object):
             "distance_mm": None,
             "robot_x_mm": None,
             "robot_y_mm": None
+        }
+
+    @staticmethod
+    def _empty_route(reason):
+        return {
+            "available": False,
+            "provisional": True,
+            "reason": reason,
+            "command": None
+        }
+
+    @staticmethod
+    def _normalize_degrees(angle):
+        while angle > 180.0:
+            angle -= 360.0
+        while angle <= -180.0:
+            angle += 360.0
+        return angle
+
+    def _arc_candidate(self, hit_x, hit_y, left_x, left_y, direction):
+        radius = self.ORBIT_RADIUS_MM
+        center_x = hit_x + direction * radius * left_x
+        center_y = hit_y + direction * radius * left_y
+        center_distance_sq = center_x * center_x + center_y * center_y
+        if center_distance_sq <= radius * radius:
+            return None
+
+        tangent_base_x = (1.0 - radius * radius / center_distance_sq) * center_x
+        tangent_base_y = (1.0 - radius * radius / center_distance_sq) * center_y
+        factor = radius * math.sqrt(
+            center_distance_sq - radius * radius
+        ) / center_distance_sq
+
+        for side in (-1.0, 1.0):
+            tangent_x = tangent_base_x + side * factor * (-center_y)
+            tangent_y = tangent_base_y + side * factor * center_x
+            radial_x = tangent_x - center_x
+            radial_y = tangent_y - center_y
+            if direction > 0:
+                travel_x, travel_y = -radial_y, radial_x
+            else:
+                travel_x, travel_y = radial_y, -radial_x
+
+            # The tangent must be travelled from the robot toward the circle.
+            if tangent_x * travel_x + tangent_y * travel_y <= 0:
+                continue
+
+            start_angle = math.atan2(radial_y, radial_x)
+            end_angle = math.atan2(hit_y - center_y, hit_x - center_x)
+            if direction > 0:
+                arc_angle = (end_angle - start_angle) % (2.0 * math.pi)
+            else:
+                arc_angle = (start_angle - end_angle) % (2.0 * math.pi)
+
+            straight = math.hypot(tangent_x, tangent_y)
+            return {
+                "direction": direction,
+                "center_x": center_x,
+                "center_y": center_y,
+                "tangent_x": tangent_x,
+                "tangent_y": tangent_y,
+                "first_turn_deg": self._normalize_degrees(
+                    math.degrees(math.atan2(tangent_y, tangent_x))
+                ),
+                "straight_mm": straight,
+                "arc_deg": direction * math.degrees(arc_angle),
+                "path_length_mm": straight + radius * arc_angle
+            }
+        return None
+
+    def _plan_route(self, ball, goal):
+        if not ball["found"] or not goal["found"]:
+            return self._empty_route("ボールまたはゴールを待っています")
+        values = (
+            ball["robot_x_mm"], ball["robot_y_mm"],
+            goal["robot_x_mm"], goal["robot_y_mm"]
+        )
+        if any(value is None for value in values):
+            return self._empty_route("距離・座標を算出できません")
+
+        ball_x, ball_y, goal_x, goal_y = values
+        goal_vector_x = goal_x - ball_x
+        goal_vector_y = goal_y - ball_y
+        goal_distance = math.hypot(goal_vector_x, goal_vector_y)
+        if goal_distance < 200.0:
+            return self._empty_route("ボールとゴールが近すぎます")
+
+        forward_x = goal_vector_x / goal_distance
+        forward_y = goal_vector_y / goal_distance
+        left_x, left_y = -forward_y, forward_x
+
+        # With the stick on the right, the robot centre is left of the ball.
+        hit_x = ball_x + self.STICK_RIGHT_OFFSET_MM * left_x
+        hit_y = ball_y + self.STICK_RIGHT_OFFSET_MM * left_y
+
+        candidates = []
+        for direction in (1.0, -1.0):
+            candidate = self._arc_candidate(
+                hit_x, hit_y, left_x, left_y, direction
+            )
+            if candidate is not None:
+                candidates.append(candidate)
+        if not candidates:
+            return self._empty_route("回り込み円への接線を作れません")
+
+        route = min(candidates, key=lambda item: item["path_length_mm"])
+        command = "zc 0 {:+.2f} 10000 {:.2f} {:.2f} {:+.2f}".format(
+            route["first_turn_deg"],
+            route["straight_mm"],
+            self.ORBIT_RADIUS_MM,
+            route["arc_deg"]
+        )
+        return {
+            "available": True,
+            "provisional": True,
+            "reason": None,
+            "command": command,
+            "first_turn_deg": round(route["first_turn_deg"], 2),
+            "straight_mm": round(route["straight_mm"], 1),
+            "orbit_radius_mm": round(self.ORBIT_RADIUS_MM, 1),
+            "arc_deg": round(route["arc_deg"], 2),
+            "hit_heading_deg": round(
+                math.degrees(math.atan2(forward_y, forward_x)), 2
+            ),
+            "hit_x_mm": round(hit_x, 1),
+            "hit_y_mm": round(hit_y, 1),
+            "tangent_x_mm": round(route["tangent_x"], 1),
+            "tangent_y_mm": round(route["tangent_y"], 1),
+            "center_x_mm": round(route["center_x"], 1),
+            "center_y_mm": round(route["center_y"], 1),
+            "stick_offset_mm": round(self.STICK_RIGHT_OFFSET_MM, 1)
         }
 
     @staticmethod
@@ -207,6 +343,7 @@ class FieldHockeyDetector(object):
             height,
             self.GOAL_HEIGHT_MM
         )
+        route = self._plan_route(red, green)
 
         cv2.line(output, (width // 2, 0), (width // 2, height), (210, 210, 210), 1)
         cv2.line(output, (0, height // 2), (width, height // 2), (210, 210, 210), 1)
@@ -220,7 +357,8 @@ class FieldHockeyDetector(object):
             "frame_width": width,
             "frame_height": height,
             "red": red,
-            "green": green
+            "green": green,
+            "route": route
         }
         with self.lock:
             self.last_status = status
@@ -232,4 +370,5 @@ class FieldHockeyDetector(object):
             status = dict(self.last_status)
             status["red"] = dict(self.last_status["red"])
             status["green"] = dict(self.last_status["green"])
+            status["route"] = dict(self.last_status["route"])
             return status

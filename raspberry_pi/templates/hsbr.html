@@ -431,6 +431,24 @@
     border: 1px solid #4b5563;
   }
 
+  .route-status {
+    max-width: 640px;
+    margin: 10px auto 0;
+    padding: 12px;
+    border: 1px solid #4b5563;
+    border-radius: 10px;
+    background: #181b20;
+    color: #d8dee9;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    white-space: pre-line;
+    line-height: 1.55;
+  }
+
+  .route-status.ready {
+    border-color: #3c8f57;
+  }
+
   .shutdown-button {
     background: #8f3434;
     color: white;
@@ -614,6 +632,9 @@
           緑ゴール：待機中
         </div>
       </div>
+      <div id="fieldHockeyRouteStatus" class="route-status">
+        回り込みルート：計算待ち
+      </div>
       <div class="hint">
         距離・座標は暫定校正値です（X＝正面、Y＝左がプラス）。
         検出のみを行い、HSBRへ移動・旋回・打撃命令は送りません。
@@ -711,6 +732,34 @@ function formatTargetStatus(name, target) {
 }
 
 
+function formatRouteStatus(route) {
+  if (!route || !route.available) {
+    const reason = route && route.reason ? route.reason : "計算待ち";
+    return "回り込みルート（暫定）：" + reason;
+  }
+
+  const firstTurn = Number(route.first_turn_deg);
+  const turnText = firstTurn < 0 ?
+    "右 " + Math.abs(firstTurn).toFixed(1) + "°" :
+    "左 " + firstTurn.toFixed(1) + "°";
+  const arc = Number(route.arc_deg);
+  const arcText = arc < 0 ?
+    "右 " + Math.abs(arc).toFixed(1) + "°" :
+    "左 " + arc.toFixed(1) + "°";
+
+  return "回り込みルート（暫定・表示のみ）" +
+    "\n1. その場旋回：" + turnText +
+    "\n2. 直進：" + Number(route.straight_mm).toFixed(0) + " mm" +
+    "\n3. 半径" + Number(route.orbit_radius_mm).toFixed(0) +
+      " mmで" + arcText +
+    "\n打撃姿勢：X=" + Number(route.hit_x_mm).toFixed(0) +
+      " mm  Y=" + (Number(route.hit_y_mm) >= 0 ? "+" : "") +
+      Number(route.hit_y_mm).toFixed(0) +
+      " mm  方向=" + Number(route.hit_heading_deg).toFixed(1) + "°" +
+    "\n連続コマンド候補：" + route.command;
+}
+
+
 async function pollFieldHockeyStatus() {
   try {
     const response = await fetch(
@@ -730,6 +779,12 @@ async function pollFieldHockeyStatus() {
     green.classList.toggle(
       "found",
       Boolean(result.green && result.green.found)
+    );
+    const route = document.getElementById("fieldHockeyRouteStatus");
+    route.textContent = formatRouteStatus(result.route);
+    route.classList.toggle(
+      "ready",
+      Boolean(result.route && result.route.available)
     );
   } catch (err) {
     document.getElementById("redTargetStatus").textContent =
