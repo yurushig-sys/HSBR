@@ -449,6 +449,46 @@
     border-color: #3c8f57;
   }
 
+  .auto-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    max-width: 640px;
+    margin: 10px auto 0;
+  }
+
+  .auto-controls button {
+    padding: 12px 8px;
+    border-radius: 10px;
+    font-size: 15px;
+  }
+
+  .auto-start {
+    background: #2f7d4c;
+    color: white;
+  }
+
+  .auto-stop {
+    background: #a33838;
+    color: white;
+  }
+
+  .auto-status {
+    max-width: 640px;
+    margin: 10px auto 0;
+    padding: 10px;
+    border-radius: 10px;
+    background: #181b20;
+    color: #d8dee9;
+    font-size: 13px;
+    white-space: pre-line;
+  }
+
+  .auto-status.warning {
+    border: 1px solid #d1842f;
+    color: #ffd58a;
+  }
+
   .shutdown-button {
     background: #8f3434;
     color: white;
@@ -635,9 +675,20 @@
       <div id="fieldHockeyRouteStatus" class="route-status">
         回り込みルート：計算待ち
       </div>
+      <div class="auto-controls">
+        <button id="fieldHockeyAutoStart" class="auto-start" type="button">
+          自動1回実行
+        </button>
+        <button id="fieldHockeyAutoStop" class="auto-stop" type="button">
+          自動停止
+        </button>
+      </div>
+      <div id="fieldHockeyAutoStatus" class="auto-status">
+        自動動作：停止中
+      </div>
       <div class="hint">
         距離・座標は暫定校正値です（X＝正面、Y＝左がプラス）。
-        検出のみを行い、HSBRへ移動・旋回・打撃命令は送りません。
+        「自動1回実行」を押すまで移動・旋回・打撃命令は送りません。
       </div>
     </div>
   </section>
@@ -760,6 +811,57 @@ function formatRouteStatus(route) {
 }
 
 
+function formatAutomationStatus(automation) {
+  if (!automation) {
+    return "自動動作：状態を取得できません";
+  }
+  let text = "自動動作：" + automation.message;
+  if (automation.battery_voltage !== null &&
+      automation.battery_voltage !== undefined) {
+    text += "\nバッテリ：" +
+      Number(automation.battery_voltage).toFixed(2) + " V";
+    if (automation.battery_warning) {
+      text += "（11V以下・要充電）";
+    }
+  } else {
+    text += "\nバッテリ：取得待ち";
+  }
+  if (automation.last_command) {
+    text += "\n実行コマンド：" + automation.last_command;
+  }
+  return text;
+}
+
+
+async function fieldHockeyAutoAction(actionName) {
+  if (actionName === "start") {
+    const ok = window.confirm(
+      "HSBRを起立させ、回り込み・打撃を1回実行します。\n\n" +
+      "周囲とバッテリ状態を確認しましたか？"
+    );
+    if (!ok) {
+      return;
+    }
+  }
+
+  try {
+    const response = await fetch("/api/apps/field-hockey/auto", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({action: actionName})
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || result.message || "auto action failed");
+    }
+    pollFieldHockeyStatus();
+  } catch (err) {
+    document.getElementById("fieldHockeyAutoStatus").textContent =
+      "自動動作エラー：" + err.message;
+  }
+}
+
+
 async function pollFieldHockeyStatus() {
   try {
     const response = await fetch(
@@ -785,6 +887,12 @@ async function pollFieldHockeyStatus() {
     route.classList.toggle(
       "ready",
       Boolean(result.route && result.route.available)
+    );
+    const autoStatus = document.getElementById("fieldHockeyAutoStatus");
+    autoStatus.textContent = formatAutomationStatus(result.automation);
+    autoStatus.classList.toggle(
+      "warning",
+      Boolean(result.automation && result.automation.battery_warning)
     );
   } catch (err) {
     document.getElementById("redTargetStatus").textContent =
@@ -815,6 +923,9 @@ function closeFieldHockeyDetection() {
   const panel = document.getElementById("fieldHockeyPanel");
   const view = document.getElementById("fieldHockeyView");
   const button = document.getElementById("fieldHockeyStart");
+
+  // Closing the live panel is also an explicit safety stop.
+  fieldHockeyAutoAction("stop");
 
   panel.hidden = true;
   view.removeAttribute("src");
@@ -1193,6 +1304,16 @@ document.getElementById("fieldHockeyStart").addEventListener(
 document.getElementById("fieldHockeyClose").addEventListener(
   "click",
   closeFieldHockeyDetection
+);
+
+document.getElementById("fieldHockeyAutoStart").addEventListener(
+  "click",
+  () => fieldHockeyAutoAction("start")
+);
+
+document.getElementById("fieldHockeyAutoStop").addEventListener(
+  "click",
+  () => fieldHockeyAutoAction("stop")
 );
 
 document.getElementById("shutdownPi").addEventListener(
