@@ -489,6 +489,58 @@
     color: #ffd58a;
   }
 
+  .command-console {
+    max-width: 640px;
+    margin: 10px auto 0;
+    padding: 12px;
+    border: 1px solid #4b5563;
+    border-radius: 10px;
+    background: #181b20;
+  }
+
+  .command-console-title {
+    margin-bottom: 8px;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .command-console-row {
+    display: grid;
+    grid-template-columns: 1fr 90px;
+    gap: 8px;
+  }
+
+  .command-console input {
+    min-width: 0;
+    padding: 11px;
+    border: 1px solid #5b6470;
+    border-radius: 8px;
+    background: #0f1115;
+    color: #ffffff;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 15px;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  .command-console button {
+    padding: 10px 8px;
+    border-radius: 8px;
+    background: #376fbd;
+    color: white;
+    font-size: 14px;
+  }
+
+  .command-console-result {
+    min-height: 20px;
+    margin-top: 8px;
+    color: #adb3bd;
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
   .shutdown-button {
     background: #8f3434;
     color: white;
@@ -664,6 +716,22 @@
         id="fieldHockeyView"
         class="detection-view"
         alt="フィールドホッケー検出映像">
+      <div class="command-console">
+        <div class="command-console-title">ESP32コマンド送信（手動調整）</div>
+        <div class="command-console-row">
+          <input
+            id="fieldHockeyCommandInput"
+            type="text"
+            inputmode="text"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="例：zp 100 または zo 10 20">
+          <button id="fieldHockeyCommandSend" type="button">送信</button>
+        </div>
+        <div id="fieldHockeyCommandResult" class="command-console-result">
+          自動動作を停止してから使用してください。
+        </div>
+      </div>
       <div class="detection-status">
         <div id="redTargetStatus" class="target-status">
           赤ボール：待機中
@@ -858,6 +926,35 @@ async function fieldHockeyAutoAction(actionName) {
   } catch (err) {
     document.getElementById("fieldHockeyAutoStatus").textContent =
       "自動動作エラー：" + err.message;
+  }
+}
+
+
+async function sendFieldHockeyCommand() {
+  const input = document.getElementById("fieldHockeyCommandInput");
+  const resultBox = document.getElementById("fieldHockeyCommandResult");
+  const command = input.value.trim();
+  if (!command) {
+    resultBox.textContent = "コマンドを入力してください。";
+    return;
+  }
+
+  resultBox.textContent = "送信中：" + command;
+  try {
+    const response = await fetch("/api/apps/field-hockey/command", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({command: command})
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || "command failed");
+    }
+    resultBox.textContent = "TX: " + result.command +
+      (result.last_rx ? "\nRX: " + result.last_rx : "\nRX: 応答待ち");
+    input.select();
+  } catch (err) {
+    resultBox.textContent = "送信エラー：" + err.message;
   }
 }
 
@@ -1314,6 +1411,21 @@ document.getElementById("fieldHockeyAutoStart").addEventListener(
 document.getElementById("fieldHockeyAutoStop").addEventListener(
   "click",
   () => fieldHockeyAutoAction("stop")
+);
+
+document.getElementById("fieldHockeyCommandSend").addEventListener(
+  "click",
+  sendFieldHockeyCommand
+);
+
+document.getElementById("fieldHockeyCommandInput").addEventListener(
+  "keydown",
+  (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      sendFieldHockeyCommand();
+    }
+  }
 );
 
 document.getElementById("shutdownPi").addEventListener(

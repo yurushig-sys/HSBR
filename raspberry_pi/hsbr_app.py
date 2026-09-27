@@ -634,6 +634,47 @@ def api_field_hockey_auto():
     return jsonify(ok=False, error="unknown action"), 400
 
 
+@app.route("/api/apps/field-hockey/command", methods=["POST"])
+def api_field_hockey_command():
+    data = request.get_json(silent=True) or {}
+    command = str(data.get("command", "")).strip()
+
+    if not command:
+        return jsonify(ok=False, error="command is empty"), 400
+    if len(command) > 120 or "\n" in command or "\r" in command:
+        return jsonify(ok=False, error="invalid command length/line break"), 400
+
+    parts = command.split()
+    token = parts[0]
+    if (len(token) < 2 or len(token) > 3 or token[0] != "z" or
+            not token[1:].isalnum()):
+        return jsonify(ok=False, error="only HSBR z commands are allowed"), 400
+
+    allowed_parameter_chars = set("0123456789+-. ")
+    parameter_text = command[len(token):]
+    if any(ch not in allowed_parameter_chars for ch in parameter_text):
+        return jsonify(ok=False, error="parameters must be numeric"), 400
+
+    automation = field_hockey_auto.get_status()
+    if automation.get("running"):
+        return jsonify(
+            ok=False,
+            error="stop automatic operation before manual command"
+        ), 409
+
+    try:
+        link.send(command)
+        time.sleep(0.15)
+    except Exception as exc:
+        return jsonify(ok=False, error=str(exc)), 503
+
+    return jsonify(
+        ok=True,
+        command=command,
+        last_rx=link.last_rx
+    )
+
+
 @app.route("/camera")
 def camera_page():
     return render_template("camera.html")
