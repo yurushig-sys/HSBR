@@ -164,7 +164,7 @@ class FieldHockeyDetector(object):
         route = min(candidates, key=lambda item: item["path_length_mm"])
         command = "zc 0 {:+.2f} 10000 {:.2f} {:.2f} {:+.2f}".format(
             route["first_turn_deg"],
-            route["straight_mm"],
+            max(0.0, route["straight_mm"] - 270.0),  #暫定補正
             self.ORBIT_RADIUS_MM,
             route["arc_deg"]
         )
