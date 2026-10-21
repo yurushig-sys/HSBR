@@ -168,6 +168,7 @@ Servo leftservo1;   // Left, Low   Hitting Stick
 Servo rightservo2;  // Right. Up   Camera H
 Servo leftservo2;   // Left, up    Camera V
 // -- odometry
+extern bool raspiSessionActive();
 float theta, wx, wy, lp;
 float Ttheta, Twx, Twy, Twx2, Twy2, Tlp;
 int32_t motLeftStep, motRightStep; //+yu
@@ -490,7 +491,7 @@ boolean enableControl;
 void loop() {
   static unsigned long tLast = 0;
   float pidAngleOutput = 0;
-  float avgMotSpeed;
+  float avgMotSpeed = 0;
   float steer = 0;
   extern int turnFlag2;
   extern float turnSteer, turnTheta;
@@ -755,7 +756,7 @@ void loop() {
       odometry(avgSpeed);
       //if (logena == 1) Serial  << "odmetry lp=" << lp << endl;
       //Read data from RCW Controller
-      RCW_loop();  //yu
+      if (!raspiSessionActive()) RCW_loop();  // Raspberry Pi session owns motion
 
       if (falldownControl == 0) {
         if (standupControl >= 1) {
@@ -846,30 +847,25 @@ void loop() {
 }
 
 void parseSerial() {
-  const int bufLen = 256;
+  const size_t bufLen=256;
   static char serialBuf[bufLen];
-  static uint8_t pos = 0;
-  char currentChar;
-
-  while (Serial.available()) {
-    currentChar = Serial.read();
-    //Serial << currentChar ; //+yu
-    //yu //serialBuf[pos++] = currentChar;
-    if (currentChar == '\n') {       //yu 'x' -> '\n'
-      serialBuf[pos++] = '\0';
-      //Serial << serialBuf <<endl ;  //+yu
-      parseCommand(serialBuf, pos);
-      pos = 0;
-    }
-    else {
-      serialBuf[pos++] = currentChar;
-      if (pos > bufLen){
-        Serial << "command is too long " << pos << " > " << bufLen << endl;
-        pos = 0;
+  static size_t pos=0;
+  static bool discard=false;
+  // Bound work per control iteration so a burst cannot starve balancing.
+  int budget=128;
+  while (Serial.available() && budget-- > 0) {
+    char c=Serial.read();
+    if(c=='\n') {
+      if(!discard && pos>0) {
+        serialBuf[pos]='\0';
+        parseCommand(serialBuf,(uint8_t)pos);
       }
+      pos=0; discard=false;
+    } else if(c!='\r' && !discard) {
+      if(pos<bufLen-1) serialBuf[pos++]=c;
+      else { discard=true; pos=0; }
     }
   }
-
 }
 
 void parseCommand(char* data, uint8_t length) {

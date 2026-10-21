@@ -1,10 +1,11 @@
 //yu original, additional functions
 
-//#include <Arduino.h>
+#include <Arduino.h>
 #include <Streaming.h>
 //#include "additionalFunctions.h"
 #include <ESP32Servo.h>
 #include <math.h>
+#include <cmath>
 #include <string.h>
 #include <Preferences.h> 
 #include <PID.h>
@@ -34,6 +35,23 @@ int rotateFlag, moveFlag, turnFlag, turnFlag2, continuousFlag, movingFlag;
 float turnSteer, targetTurnSteer;
 float TspeedInput, tempSpeedIn;
 float positionP = 0.5;
+
+// Raspberry Pi supervised motion experiment (no distance target on ESP32).
+// zV period_ms : telemetry 10..100 ms, 0 disables.
+// zR id speed steer : immediate motion + acknowledgement. zK : heartbeat.
+static bool remoteActive = false;
+static uint32_t remoteLastCommandMs = 0;
+static const uint32_t remoteWatchdogMs = 500;
+static uint32_t remoteTelemetryPeriodMs = 0;
+static uint32_t remoteLastTelemetryMs = 0;
+static float remoteDistanceMm = 0; // independent of lp/reset of motion segments
+static float remoteVelocityMmS = 0;
+static float remoteSpeedDistance = 0;
+static uint32_t remoteSpeedStartMs = 0;
+bool raspiSessionActive(){ return remoteTelemetryPeriodMs!=0; }
+static void remoteHalt();
+static void remoteFeedback(float distanceDeltaMm);
+
 
 //Stand Up control
 extern int delay_counter, standupControl, ballhit;
@@ -175,9 +193,61 @@ void parseCommand_z(char* data, uint8_t length){
 
   pn = getParam(data, length);
   
+  if (pn < 0) { Serial.println("Parameter error"); return; }
+
   //Serial << "Number of Params = " << pn <<endl;
 
+  if (remoteTelemetryPeriodMs && data[1]!='R' && data[1]!='K' &&
+      data[1]!='V' && data[1]!='h' && data[1]!='d' && data[1]!='e') {
+    remoteHalt();
+    Serial.println("Remote session: use zV 0 before legacy commands");
+    return;
+  }
   switch (data[1]) {
+    case 'V': {
+      if (pn!=1) { Serial.println("Usage: zV period_ms"); break; }
+      int period=atoi(param[0]);
+      if (period!=0 && (period<10 || period>100)) {
+        Serial.println("zV: period must be 0 or 10..100 ms"); break;
+      }
+      // Do not let legacy automatic movement compete with remote management.
+      remoteHalt();
+      remoteTelemetryPeriodMs=period;
+      remoteLastTelemetryMs=millis();
+      break;
+    }
+    case 'K':
+      if (pn==0 && remoteActive) remoteLastCommandMs=millis();
+      break;
+    case 'R': {
+      if (pn!=3) { Serial.println("Usage: zR id speed steer"); break; }
+      char *end0, *end1, *end2;
+      long id=strtol(param[0],&end0,10);
+      float speed=strtof(param[1],&end1), steer=strtof(param[2],&end2);
+      if (*end0 || *end1 || *end2 || id<=0 || !std::isfinite(speed) ||
+          !std::isfinite(steer) || speed<0 || speed>60 || fabs(steer)>60) {
+        Serial.println("ERR,0,arguments"); break;
+      }
+      if (!enableControl || falldownControl || standupControl) {
+        Serial.printf("ERR,%ld,not_upright\n",id); break;
+      }
+      if (!remoteTelemetryPeriodMs) {
+        Serial.printf("ERR,%ld,telemetry_disabled\n",id); break;
+      }
+      moveFlag=rotateFlag=turnFlag=turnFlag2=continuousFlag=0;
+      hit=0;
+      speedInput=speed; tempSpeedIn=speed; steerInput=steer;
+      remoteActive=true;
+      remoteLastCommandMs=millis();
+      // Receipt acknowledgement; physical response occurs later.
+      char ack[96];
+      int n=snprintf(ack,sizeof(ack),"ACK,%ld,%lu,%.2f,%.2f\n",id,
+          (unsigned long)millis(),remoteDistanceMm,theta*180/M_PI);
+      if(n>0 && n<(int)sizeof(ack) && Serial.availableForWrite()>=n)
+        Serial.write((const uint8_t*)ack,n);
+      break;
+    }
+
     case 'a' :   //set angle_offset to flush
       Serial << "Updating angle offset from " << angleOffset;
       angleOffset = atof(param[0]);
@@ -222,6 +292,7 @@ void parseCommand_z(char* data, uint8_t length){
       break; 
 
     case 'h' :        //Halt all movement
+      remoteActive=false;
       moveFlag = 0;
       rotateFlag = 0;
       turnFlag = 0;
@@ -402,38 +473,56 @@ void parseCommand_z(char* data, uint8_t length){
 }
 
 int getParam(char* data, uint8_t len){
-  char *m, *n;
-  int pn_ = 0;
-
-  m = strchr(data, ' ') ; //find 1st space
-  if ( m == NULL){
-    return 0;
+  (void)len;
+  const char* m=strchr(data,' ');
+  if (!m) return 0;
+  int count=0;
+  while (*m) {
+    while (*m==' ' || *m=='\r' || *m=='\t') ++m;
+    if (!*m) break;
+    const char* begin=m;
+    while (*m && *m!=' ' && *m!='\r' && *m!='\t') ++m;
+    size_t n=m-begin;
+    if (count>=paramMax || n>=sizeof(param[0])) return -1;
+    memcpy(param[count],begin,n); param[count][n]='\0'; ++count;
   }
-  m += 1;
-  while (true) {
-    while (*m == ' ') {
-      m ++; //remove continuous space
-    }
-    if (*m == '\0') return pn_;
-
-    n = strchr(m, ' ');  //find 2nd space
-    if (n == NULL){
-      strncpy(param[pn_], m, len - (m - data));
-      return pn_ + 1;
-    }
-    else {
-      strncpy(param[pn_], m, n-m);
-      param[pn_][n-m] = '\0' ;
-      m = n + 1;
-      pn_ += 1; 
-      if (pn_ > paramMax) {
-        Serial << "over parameters, paramNumber="<< pn_
-               << "max Param=" << paramMax << endl;
-      }
-    }
-  }
+  return count;
 }
 
+static void remoteHalt(){
+  remoteActive=false;
+  moveFlag=rotateFlag=turnFlag=turnFlag2=continuousFlag=0;
+  speedInput=tempSpeedIn=steerInput=0;
+  hit=0;
+  ballhit=0;
+}
+
+static void remoteFeedback(float distanceDeltaMm){
+  uint32_t now=millis();
+  remoteDistanceMm+=distanceDeltaMm;
+  remoteSpeedDistance+=distanceDeltaMm;
+  uint32_t elapsed=now-remoteSpeedStartMs;
+  if (elapsed>=50) {
+    remoteVelocityMmS=remoteSpeedDistance*1000.0f/elapsed;
+    remoteSpeedDistance=0;
+    remoteSpeedStartMs=now;
+  }
+  if (remoteActive && (!enableControl || falldownControl ||
+      (uint32_t)(now-remoteLastCommandMs)>remoteWatchdogMs)) {
+    remoteHalt();
+  }
+  if (remoteTelemetryPeriodMs &&
+      (uint32_t)(now-remoteLastTelemetryMs)>=remoteTelemetryPeriodMs) {
+    remoteLastTelemetryMs=now;
+    char line[112];
+    int n=snprintf(line,sizeof(line),"OD,%lu,%.2f,%.2f,%.2f,%d,%d\n",
+       (unsigned long)now,remoteDistanceMm,remoteVelocityMmS,
+       theta*180/M_PI,(int)enableControl,(int)remoteActive);
+    // Drop a sample rather than block the balance loop on serial output.
+    if(n>0 && n<(int)sizeof(line) && Serial.availableForWrite()>=n)
+      Serial.write((const uint8_t*)line,n);
+  }
+}
 
 //
 //odeometry
@@ -444,7 +533,6 @@ int aveCount, maxCount = 50;
 void odometry(float avgspeed){
   float dLeft, dRight; //, dAverage;
   float dtheta, d_theta;
-  static int running = 0;
 
   //calculate current position 
   dLeft = wr * 2 * M_PI * (motLeftStep - lastMotLeftStep) / (microStep * 200);
@@ -453,6 +541,7 @@ void odometry(float avgspeed){
   dAverage = dRight + (dLeft - dRight) / 2;
   dtheta = atan((dLeft - dRight) / wD);
   theta -= dtheta;
+  remoteFeedback(-dAverage);
   runLength -= dAverage;
   aveSum += dAverage;
   aveCount += 1;
@@ -677,7 +766,8 @@ void calculateTurn(int n){
 }
   
 
-void odometry_init(int rst){    //rst==0: reset, rst==1:stop
+void odometry_init(int rst){
+  remoteActive=false;    //rst==0: reset, rst==1:stop
   //theta = 0;
   //wx = 0;
   //wy = 0;
