@@ -265,7 +265,12 @@ class ESP32Link(object):
                         delta=(ms-self._last_device_ms)&0xffffffff
                         if delta==0:
                             return True
-                        if delta>10000:
+                        # OD is deliberately disabled between single-hit runs.
+                        # A forward gap, however long, is not a reconnection.
+                        # Only a backward device clock (allowing uint32 wrap)
+                        # indicates a reset here. Serial reopen is tracked
+                        # separately in _ensure_open_unlocked().
+                        if delta>=0x80000000:
                             self.telemetry['generation']+=1
                             self.telemetry['radius_cap_at']=0.
                     self._last_device_ms=ms
