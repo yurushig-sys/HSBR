@@ -169,6 +169,9 @@ Servo rightservo2;  // Right. Up   Camera H
 Servo leftservo2;   // Left, up    Camera V
 // -- odometry
 extern bool raspiSessionActive();
+extern bool raspiArcActive;
+extern float raspiArcRatio;
+extern int raspiArcDirection;
 float theta, wx, wy, lp;
 float Ttheta, Twx, Twy, Twx2, Twy2, Tlp;
 int32_t motLeftStep, motRightStep; //+yu
@@ -608,7 +611,17 @@ void loop() {
         avgMotSpeedSum  = -maxStepSpeed;
       }
       avgMotSpeed = avgMotSpeedSum;
-      if (turnFlag2 == 0){    //+yu
+      if (raspiArcActive) {
+        // Preserve the mean balancing output while applying zc's wheel ratio.
+        float outer=avgMotSpeed * 2.0f/(1.0f+raspiArcRatio);
+        float inner=outer*raspiArcRatio;
+        if(raspiArcDirection>0) {
+          motLeft.speed=outer; motRight.speed=inner;
+        } else {
+          motLeft.speed=inner; motRight.speed=outer;
+        }
+      }
+      else if (turnFlag2 == 0){    //+yu
         motLeft.speed = avgMotSpeed + steer;
         motRight.speed = avgMotSpeed - steer;
       }  //+yu

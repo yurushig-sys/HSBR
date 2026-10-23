@@ -761,6 +761,11 @@
       <div id="fieldHockeyRouteStatus" class="route-status">
         回り込みルート：計算待ち
       </div>
+      <div class="hint">
+        <label><input id="fieldHockeyHitEnabled" type="checkbox"> 打撃あり（OFFは走行のみ）</label>
+        <label>振り下ろし時間 <input id="fieldHockeyStrokeSeconds" type="number"
+          min="0.02" max="1" step="0.01" value="0.18" style="width:75px"> 秒</label>
+      </div>
       <div class="auto-controls">
         <button id="fieldHockeyAutoStart" class="auto-start" type="button">
           自動1回実行
@@ -775,6 +780,7 @@
       <div class="hint">
         距離・座標は暫定校正値です（X＝正面、Y＝左がプラス）。
         「自動1回実行」を押すまで移動・旋回・打撃命令は送りません。
+        初期旋回後は停止せず、直進から円弧へつなぎます。打撃後の駆動直進はありません。
       </div>
     </div>
   </section>
@@ -807,6 +813,7 @@ let lastSentSteer = null;
 let sendBusy = false;
 let sendQueued = false;
 let fieldHockeyStatusTimer = null;
+let fieldHockeyAutoRunning = false;
 
 
 function showTab(name) {
@@ -884,7 +891,7 @@ function formatRouteStatus(route) {
     "右 " + Math.abs(arc).toFixed(1) + "°" :
     "左 " + arc.toFixed(1) + "°";
 
-  return "回り込みルート（暫定・表示のみ）" +
+  return "回り込みルート（開始時に確定）" +
     "\n1. その場旋回：" + turnText +
     "\n2. 直進：" + Number(route.straight_mm).toFixed(0) + " mm" +
     "\n3. 半径" + Number(route.orbit_radius_mm).toFixed(0) +
@@ -893,7 +900,8 @@ function formatRouteStatus(route) {
       " mm  Y=" + (Number(route.hit_y_mm) >= 0 ? "+" : "") +
       Number(route.hit_y_mm).toFixed(0) +
       " mm  方向=" + Number(route.hit_heading_deg).toFixed(1) + "°" +
-    "\n連続コマンド候補：" + route.command;
+    "\n4. 円弧終点で打撃・停止指令（その後は惰性走行）" +
+    "\n軌道表現：" + route.command;
 }
 
 
@@ -922,7 +930,8 @@ function formatAutomationStatus(automation) {
 async function fieldHockeyAutoAction(actionName) {
   if (actionName === "start") {
     const ok = window.confirm(
-      "HSBRを起立させ、回り込み・打撃を1回実行します。\n\n" +
+      "初期旋回→直進→円弧回り込み→終点で停止指令。\n" +
+      (document.getElementById("fieldHockeyHitEnabled").checked ? "打撃あり\n\n" : "走行のみ（打撃なし）\n\n") +
       "周囲とバッテリ状態を確認しましたか？"
     );
     if (!ok) {
@@ -930,11 +939,18 @@ async function fieldHockeyAutoAction(actionName) {
     }
   }
 
+  if (actionName === "start") {
+    desiredSpeed = desiredSteer = 0;
+    speedJoystick.center(); steerJoystick.center(); updateValueDisplay();
+    fieldHockeyAutoRunning = true;
+  }
   try {
     const response = await fetch("/api/apps/field-hockey/auto", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({action: actionName})
+      body: JSON.stringify({action: actionName,
+        hit_enabled: document.getElementById("fieldHockeyHitEnabled").checked,
+        stroke_seconds: Number(document.getElementById("fieldHockeyStrokeSeconds").value)})
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
@@ -942,6 +958,7 @@ async function fieldHockeyAutoAction(actionName) {
     }
     pollFieldHockeyStatus();
   } catch (err) {
+    fieldHockeyAutoRunning = false;
     document.getElementById("fieldHockeyAutoStatus").textContent =
       "自動動作エラー：" + err.message;
   }
@@ -1046,6 +1063,7 @@ async function pollFieldHockeyStatus() {
       Boolean(result.route && result.route.available)
     );
     const autoStatus = document.getElementById("fieldHockeyAutoStatus");
+    fieldHockeyAutoRunning = Boolean(result.automation && result.automation.running);
     autoStatus.textContent = formatAutomationStatus(result.automation);
     autoStatus.classList.toggle(
       "warning",
@@ -1110,6 +1128,10 @@ function updateValueDisplay() {
 
 
 async function sendDrive(force=false) {
+  if (fieldHockeyAutoRunning) {
+    desiredSpeed = desiredSteer = 0;
+    return;
+  }
   const speed = round1(desiredSpeed);
   const steer = round1(desiredSteer);
 

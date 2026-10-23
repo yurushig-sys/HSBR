@@ -17,8 +17,7 @@ class FieldHockeyDetector(object):
     CAMERA_CX_PX = 320.0
     CAMERA_FX_PX = 525.0
 
-    # Provisional vertical-distance calibration.  These values are used for
-    # display only and must not yet be used to issue motion commands.
+    # Provisional vertical-distance calibration retained from the uploaded code.
     CAMERA_CY_PX = 240.0
     CAMERA_FY_PX = 779.0
     CAMERA_HEIGHT_MM = 170.0
@@ -133,7 +132,7 @@ class FieldHockeyDetector(object):
             ball["robot_x_mm"], ball["robot_y_mm"],
             goal["robot_x_mm"], goal["robot_y_mm"]
         )
-        if any(value is None for value in values):
+        if any(value is None or not math.isfinite(value) for value in values):
             return self._empty_route("距離・座標を算出できません")
 
         ball_x, ball_y, goal_x, goal_y = values
@@ -164,7 +163,7 @@ class FieldHockeyDetector(object):
         route = min(candidates, key=lambda item: item["path_length_mm"])
         command = "zc 0 {:+.2f} 10000 {:.2f} {:.2f} {:+.2f}".format(
             route["first_turn_deg"],
-            max(0.0, route["straight_mm"] - 270.0),  #暫定補正
+            route["straight_mm"],  # Pi switches by telemetry; no stopping-distance subtraction
             self.ORBIT_RADIUS_MM,
             route["arc_deg"]
         )
@@ -172,9 +171,13 @@ class FieldHockeyDetector(object):
             "available": True,
             "provisional": True,
             "reason": None,
-            "command": command,
+            "command": command, # geometric preview only; never sent as a full zc
+            "execution": "raspi_radius_v1",
+            "coordinate_frame": "forward_x_left_y",
+            "arc_length_mm": round(self.ORBIT_RADIUS_MM * abs(math.radians(route["arc_deg"])), 2),
+            "path_length_mm": round(route["path_length_mm"], 2),
             "first_turn_deg": round(route["first_turn_deg"], 2),
-            "straight_mm": round(route["straight_mm"], 1),
+            "straight_mm": round(route["straight_mm"], 2),
             "orbit_radius_mm": round(self.ORBIT_RADIUS_MM, 1),
             "arc_deg": round(route["arc_deg"], 2),
             "hit_heading_deg": round(

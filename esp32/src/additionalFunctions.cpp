@@ -40,6 +40,10 @@ float positionP = 0.5;
 // zV period_ms : telemetry 10..100 ms, 0 disables.
 // zR id speed steer : immediate motion + acknowledgement. zK : heartbeat.
 static bool remoteActive = false;
+bool raspiArcActive = false;
+float raspiArcRatio = 1.0f;
+int raspiArcDirection = 1; // + left (theta increasing), - right
+
 static uint32_t remoteLastCommandMs = 0;
 static const uint32_t remoteWatchdogMs = 500;
 static uint32_t remoteTelemetryPeriodMs = 0;
@@ -198,12 +202,44 @@ void parseCommand_z(char* data, uint8_t length){
   //Serial << "Number of Params = " << pn <<endl;
 
   if (remoteTelemetryPeriodMs && data[1]!='R' && data[1]!='K' &&
-      data[1]!='V' && data[1]!='h' && data[1]!='d' && data[1]!='e') {
+      data[1]!='V' && data[1]!='h' && data[1]!='d' && data[1]!='e' &&
+      data[1]!='C' && data[1]!='P' && !(data[1]=='s' && data[2]=='s')) {
     remoteHalt();
     Serial.println("Remote session: use zV 0 before legacy commands");
     return;
   }
   switch (data[1]) {
+    case 'P': // protocol/capability query; never starts motion
+      Serial.println("CAP,FH_RADIUS_V1");
+      break;
+    case 'C': { // zC id speed signed_radius_mm; Pi owns end angle/distance
+      if(pn!=3) { Serial.println("ERR,0,arguments"); break; }
+      char *e0,*e1,*e2;
+      long id=strtol(param[0],&e0,10);
+      float speed=strtof(param[1],&e1), radius=strtof(param[2],&e2);
+      if(*e0 || *e1 || *e2 || id<=0 || !std::isfinite(speed) ||
+         !std::isfinite(radius) || speed<15 || speed>60 ||
+         fabs(radius)<60 || fabs(radius)>5000) {
+        Serial.println("ERR,0,arguments"); break;
+      }
+      if(!enableControl || falldownControl || standupControl || !remoteTelemetryPeriodMs) {
+        Serial.printf("ERR,%ld,not_ready\n",id); break;
+      }
+      moveFlag=rotateFlag=turnFlag=turnFlag2=continuousFlag=0;
+      hit=0;
+      // The same geometric inner/outer ratio as legacy zc.
+      raspiArcRatio=(fabs(radius)-wD/2)/(fabs(radius)+wD/2);
+      raspiArcDirection=(radius>0) ? 1 : -1;
+      speedInput=tempSpeedIn=speed; steerInput=0;
+      raspiArcActive=true; remoteActive=true;
+      remoteLastCommandMs=millis();
+      char ack[96];
+      int n=snprintf(ack,sizeof(ack),"ACK,%ld,%lu,%.2f,%.2f\n",id,
+          (unsigned long)millis(),remoteDistanceMm,theta*180/M_PI);
+      if(n>0 && n<(int)sizeof(ack) && Serial.availableForWrite()>=n)
+        Serial.write((const uint8_t*)ack,n);
+      break;
+    }
     case 'V': {
       if (pn!=1) { Serial.println("Usage: zV period_ms"); break; }
       int period=atoi(param[0]);
@@ -236,6 +272,7 @@ void parseCommand_z(char* data, uint8_t length){
       }
       moveFlag=rotateFlag=turnFlag=turnFlag2=continuousFlag=0;
       hit=0;
+      raspiArcActive=false;
       speedInput=speed; tempSpeedIn=speed; steerInput=steer;
       remoteActive=true;
       remoteLastCommandMs=millis();
@@ -293,6 +330,7 @@ void parseCommand_z(char* data, uint8_t length){
 
     case 'h' :        //Halt all movement
       remoteActive=false;
+      raspiArcActive=false;
       moveFlag = 0;
       rotateFlag = 0;
       turnFlag = 0;
@@ -434,6 +472,10 @@ void parseCommand_z(char* data, uint8_t length){
           Serial << "camera V=" << atoi(param[0]) << endl;
           break;
         case 's':   //hitting stick
+          if (pn!=1 || !std::isfinite(atof(param[0])) ||
+              atof(param[0])<0 || atof(param[0])>180) {
+            remoteHalt(); Serial.println("ERR,0,stick_angle"); break;
+          }
           leftservo1.write(atoi(param[0]));
           Serial << "ball stick=" << atoi(param[0]) << endl;
           break;
@@ -491,6 +533,7 @@ int getParam(char* data, uint8_t len){
 
 static void remoteHalt(){
   remoteActive=false;
+  raspiArcActive=false;
   moveFlag=rotateFlag=turnFlag=turnFlag2=continuousFlag=0;
   speedInput=tempSpeedIn=steerInput=0;
   hit=0;
@@ -767,7 +810,8 @@ void calculateTurn(int n){
   
 
 void odometry_init(int rst){
-  remoteActive=false;    //rst==0: reset, rst==1:stop
+  remoteActive=false;
+  raspiArcActive=false;    //rst==0: reset, rst==1:stop
   //theta = 0;
   //wx = 0;
   //wy = 0;

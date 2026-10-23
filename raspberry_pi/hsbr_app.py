@@ -13,6 +13,7 @@
 # Serial parser on ESP32 terminates commands with '\n'.
 
 import atexit
+import math
 from datetime import datetime
 import os
 import threading
@@ -22,6 +23,7 @@ import time
 from flask import Flask, Response, jsonify, render_template, request
 from hsbr.camera_manager import CameraManager
 from hsbr.field_hockey import FieldHockeyDetector
+from hsbr.field_hockey_motion import FieldHockeyAutoController
 import cv2
 import serial
 import subprocess
@@ -67,7 +69,10 @@ class ESP32Link(object):
             "param_index": None,
             "battery_voltage": None,
             "status_at": 0.0,
-            "data_at": 0.0
+            "data_at": 0.0,
+            "generation": 0,
+            "od_at": 0.0,
+            "radius_cap_at": 0.0
         }
 
         # Serial log state. Only this process owns /dev/ttyUSB0;
@@ -81,6 +86,9 @@ class ESP32Link(object):
         # This prevents timeout-fragmented reads from becoming broken log lines.
         self.rx_buffer = bytearray()
 
+        self._command_id = 0
+        self._command_results = {}
+        self._last_device_ms = None
         self.reader_thread = threading.Thread(target=self._reader_loop, name="esp32-rx")
         self.reader_thread.daemon = True
         self.reader_thread.start()
@@ -92,6 +100,8 @@ class ESP32Link(object):
             except Exception:
                 pass
         self.ser = None
+        with self.telemetry_lock:
+            self.telemetry['od_at']=0.0
 
     def _ensure_open_unlocked(self):
         if self.ser is not None and self.ser.is_open:
@@ -101,9 +111,18 @@ class ESP32Link(object):
         self.ser = serial.Serial(
             self.port,
             self.baud,
-            timeout=0.05,
-            write_timeout=0.2
+            timeout=0.01,
+            write_timeout=0.05,
+            exclusive=True
         )
+        with self.telemetry_lock:
+            generation=self.telemetry.get("generation",0)+1
+            self.telemetry.update(generation=generation, od_at=0.0, radius_cap_at=0.0,
+                                  status_at=0.0, data_at=0.0, enable_control=None,
+                                  battery_voltage=None)
+            self._last_device_ms=None
+            self._command_results.clear()
+        # Keep pySerial's default DTR/RTS settings, as in the successful miniterm test.
         # Do not reset ESP32 input/output buffers here.
         self.last_error = ""
 
@@ -193,6 +212,8 @@ class ESP32Link(object):
         text = raw_line.decode("utf-8", errors="replace")
         self.last_rx = text
         self._log_record("RX", text)
+        if self._handle_remote_line(text):
+            return
         fields = text.split()
         try:
             if len(fields) >= 7 and fields[0] == "Status":
@@ -215,6 +236,60 @@ class ESP32Link(object):
         except (TypeError, ValueError):
             # Keep the serial reader alive if a diagnostic line is malformed.
             pass
+
+    def next_command_id(self):
+        with self.telemetry_lock:
+            self._command_id += 1
+            self._command_results.pop(0,None)
+            return self._command_id
+
+    def get_command_result(self, ident):
+        with self.telemetry_lock:
+            return self._command_results.pop(ident,None) or self._command_results.pop(0,None)
+
+    def _handle_remote_line(self, text):
+        f=text.split(',')
+        now=time.monotonic()
+        try:
+            if len(f)==2 and f[0]=='CAP' and f[1]=='FH_RADIUS_V1':
+                with self.telemetry_lock:
+                    self.telemetry['radius_cap_at']=now
+                return True
+            if len(f)==7 and f[0]=='OD':
+                ms=int(f[1]); d,v,angle=map(float,f[2:5])
+                upright,active=map(int,f[5:7])
+                if not all(math.isfinite(x) for x in (d,v,angle)):
+                    return True
+                with self.telemetry_lock:
+                    if self._last_device_ms is not None:
+                        delta=(ms-self._last_device_ms)&0xffffffff
+                        if delta==0:
+                            return True
+                        if delta>10000:
+                            self.telemetry['generation']+=1
+                            self.telemetry['radius_cap_at']=0.
+                    self._last_device_ms=ms
+                    self.telemetry.update(device_ms=ms,distance_mm=d,velocity_mm_s=v,
+                                          angle_deg=angle,enable_control=upright,
+                                          remote_active=active,od_at=now)
+                return True
+            if len(f)==5 and f[0]=='ACK':
+                ident=int(f[1]); ms=int(f[2]); d,angle=map(float,f[3:5])
+                if not all(math.isfinite(x) for x in (d,angle)):
+                    return True
+                with self.telemetry_lock:
+                    self._command_results[ident]=dict(device_ms=ms,distance_mm=d,
+                                                       angle_deg=angle,ack_at=now)
+                    if len(self._command_results)>100:
+                        self._command_results.pop(next(iter(self._command_results)))
+                return True
+            if len(f)>=3 and f[0]=='ERR':
+                with self.telemetry_lock:
+                    self._command_results[int(f[1])]=dict(error=','.join(f[2:]))
+                return True
+        except (ValueError,TypeError):
+            return True
+        return False
 
     def get_telemetry(self):
         with self.telemetry_lock:
@@ -257,7 +332,7 @@ class ESP32Link(object):
         self.running = False
         try:
             # Best effort: zero the remote command before shutting down.
-            self.send("zj 0 0")
+            self.send_many(["zh", "zV 0"])
         except Exception:
             pass
 
@@ -265,262 +340,6 @@ class ESP32Link(object):
 
         with self.lock:
             self._close_unlocked()
-
-
-class FieldHockeyAutoController(object):
-    """One-shot field-hockey motion controller with voltage interlock."""
-
-    WARNING_VOLTAGE = 11.0
-    CRITICAL_VOLTAGE = 10.5
-    CRITICAL_SECONDS = 2.0
-
-    STICK_BACK = 50
-    STICK_HIT = 150
-    STICK_NEUTRAL = 90
-
-    def __init__(self, link, detector):
-        self.link = link
-        self.detector = detector
-        self.lock = threading.Lock()
-        self.stop_event = threading.Event()
-        self.running = False
-        self.state = "idle"
-        self.message = "停止中"
-        self.last_command = ""
-        self.warning = False
-        self.critical_since = None
-        self.shutdown_started = False
-
-        self.monitor_thread = threading.Thread(
-            target=self._monitor_loop,
-            name="hsbr-safety-monitor"
-        )
-        self.monitor_thread.daemon = True
-        self.monitor_thread.start()
-
-    def _set_state(self, state, message):
-        with self.lock:
-            self.state = state
-            self.message = message
-
-    def get_status(self):
-        telemetry = self.link.get_telemetry()
-        with self.lock:
-            return {
-                "running": self.running,
-                "state": self.state,
-                "message": self.message,
-                "last_command": self.last_command,
-                "battery_voltage": telemetry.get("battery_voltage"),
-                "battery_warning": self.warning,
-                "shutdown_started": self.shutdown_started,
-                "enable_control": telemetry.get("enable_control"),
-                "continuous_flag": telemetry.get("continuous_flag")
-            }
-
-    def _safe_stop(self):
-        try:
-            self.link.send_many([
-                "zj 0 0",
-                "zh",
-                "zss {}".format(self.STICK_NEUTRAL)
-            ])
-        except Exception:
-            pass
-
-    def stop(self, message="操作者が停止しました"):
-        self.stop_event.set()
-        self._safe_stop()
-        with self.lock:
-            self.running = False
-            self.state = "stopped"
-            self.message = message
-
-    def start(self):
-        with self.lock:
-            if self.running:
-                return False, "すでに実行中です"
-            if self.shutdown_started:
-                return False, "低電圧シャットダウン中です"
-            self.running = True
-            self.state = "starting"
-            self.message = "自動1回動作を開始します"
-            self.last_command = ""
-        self.stop_event.clear()
-        worker = threading.Thread(target=self._run_once, name="field-hockey-auto")
-        worker.daemon = True
-        worker.start()
-        return True, "開始しました"
-
-    def _request_status(self):
-        self.link.send("zd0")
-        time.sleep(0.12)
-        return self.link.get_telemetry()
-
-    def _wait_standing(self, timeout=10.0):
-        deadline = time.monotonic() + timeout
-        stable_since = None
-        while time.monotonic() < deadline and not self.stop_event.is_set():
-            telemetry = self._request_status()
-            if telemetry.get("enable_control") == 1:
-                if stable_since is None:
-                    stable_since = time.monotonic()
-                elif time.monotonic() - stable_since >= 1.0:
-                    return True
-            else:
-                stable_since = None
-            time.sleep(0.15)
-        return False
-
-    def _capture_stable_route(self, timeout=5.0):
-        deadline = time.monotonic() + timeout
-        available_count = 0
-        route = None
-        while time.monotonic() < deadline and not self.stop_event.is_set():
-            status = self.detector.get_status()
-            candidate = status.get("route") or {}
-            if candidate.get("available"):
-                available_count += 1
-                route = candidate
-                if available_count >= 5:
-                    return route
-            else:
-                available_count = 0
-                route = None
-            time.sleep(0.2)
-        return None
-
-    def _wait_continuous_complete(self, timeout=30.0):
-        deadline = time.monotonic() + timeout
-        started = False
-        while time.monotonic() < deadline and not self.stop_event.is_set():
-            telemetry = self._request_status()
-            flag = telemetry.get("continuous_flag")
-            if flag == 1:
-                started = True
-            elif flag == 0 and started:
-                return True
-            time.sleep(0.1)
-        return False
-
-    def _run_once(self):
-        try:
-            telemetry = self.link.get_telemetry()
-            voltage = telemetry.get("battery_voltage")
-            if voltage is None:
-                self._set_state("checking", "バッテリ電圧を確認しています")
-                self.link.send("zd1")
-                time.sleep(0.4)
-                voltage = self.link.get_telemetry().get("battery_voltage")
-            if voltage is None:
-                raise RuntimeError("バッテリ電圧を取得できません")
-            if voltage <= self.CRITICAL_VOLTAGE:
-                self._set_state(
-                    "low_voltage_check",
-                    "10.5V以下：2秒間の継続を確認しています"
-                )
-                time.sleep(self.CRITICAL_SECONDS)
-                self.link.send("zd1")
-                time.sleep(0.3)
-                voltage = self.link.get_telemetry().get("battery_voltage")
-                if voltage is not None and voltage <= self.CRITICAL_VOLTAGE:
-                    self._critical_shutdown(voltage)
-                    return
-
-            self._set_state("stand_check", "起立状態を確認しています")
-            telemetry = self._request_status()
-            if telemetry.get("enable_control") != 1:
-                self._set_state("standing_up", "起立しています")
-                self.link.send_many(["zj 0 0", "zu1"])
-            if not self._wait_standing():
-                raise RuntimeError("起立を確認できません")
-
-            self._set_state("searching", "ゴールとボールを確認しています")
-            route = self._capture_stable_route()
-            if route is None:
-                raise RuntimeError("ゴールまたはボールを確認できません")
-
-            command = route.get("command")
-            if not command or not command.startswith("zc "):
-                raise RuntimeError("回り込みコマンドを作成できません")
-
-            # Arm the stick immediately before starting the first turn.
-            self._set_state("moving", "スティックを後ろへ引いて移動します")
-            self.link.send("zss {}".format(self.STICK_BACK))
-            time.sleep(0.1)
-            with self.lock:
-                self.last_command = command
-            self.link.send(command)
-
-            if not self._wait_continuous_complete():
-                raise RuntimeError("回り込み移動が完了しませんでした")
-
-            self._set_state("hitting", "打撃しています")
-            self.link.send("zss {}".format(self.STICK_HIT))
-            time.sleep(0.5)
-            self.link.send("zss {}".format(self.STICK_NEUTRAL))
-
-            self._set_state("pause", "打撃後停止中です")
-            time.sleep(1.5)
-            self._safe_stop()
-            with self.lock:
-                self.running = False
-                self.state = "completed"
-                self.message = "1回の打撃動作が完了しました"
-
-        except Exception as exc:
-            self._safe_stop()
-            with self.lock:
-                self.running = False
-                self.state = "error"
-                self.message = str(exc)
-
-    def _critical_shutdown(self, voltage):
-        with self.lock:
-            if self.shutdown_started:
-                return
-            self.shutdown_started = True
-            self.running = False
-            self.state = "low_battery_shutdown"
-            self.message = "低電圧 {:.2f}V：安全終了します".format(voltage)
-        self.stop_event.set()
-        try:
-            self.link.send_many([
-                "zj 0 0",
-                "zh",
-                "zss {}".format(self.STICK_NEUTRAL),
-                "zu0"
-            ])
-        except Exception:
-            pass
-        time.sleep(1.0)
-        try:
-            self.link.stop_log()
-        except Exception:
-            pass
-        subprocess.Popen(["sudo", "-n", "/sbin/shutdown", "-h", "now"])
-
-    def _monitor_loop(self):
-        while True:
-            try:
-                self.link.send("zd1")
-                time.sleep(0.3)
-                voltage = self.link.get_telemetry().get("battery_voltage")
-                now = time.monotonic()
-                if voltage is not None:
-                    with self.lock:
-                        self.warning = voltage <= self.WARNING_VOLTAGE
-                        safety_active = self.running
-                    if safety_active and voltage <= self.CRITICAL_VOLTAGE:
-                        if self.critical_since is None:
-                            self.critical_since = now
-                        elif now - self.critical_since >= self.CRITICAL_SECONDS:
-                            self._critical_shutdown(voltage)
-                    else:
-                        self.critical_since = None
-            except Exception:
-                pass
-            time.sleep(0.7)
 
 
 #app = Flask(__name__)
@@ -544,6 +363,28 @@ field_hockey_auto = FieldHockeyAutoController(link, field_hockey)
 current_speed = 0.0
 current_steer = 0.0
 state_lock = threading.Lock()
+
+
+@app.before_request
+def protect_automatic_motion():
+    if request.path=="/api/shutdown" and request.method=="POST":
+        data=request.get_json(silent=True) or {}
+        if data.get("confirm")=="shutdown":
+            field_hockey_auto.stop("シャットダウン要求")
+    if not field_hockey_auto.get_status()["running"]:
+        return None
+    if request.path=="/api/action" and request.method=="POST":
+        data=request.get_json(silent=True) or {}
+        if data.get("action") in ("stop","stand_down"):
+            field_hockey_auto.stop()
+            if data.get("action")=="stand_down":
+                with field_hockey_auto.command_lock:
+                    link.send_many(["zh","zV 0","zu0"])
+            return jsonify(ok=True,action=data["action"])
+    if request.path in ("/api/drive","/api/action","/api/log",
+                         "/api/apps/field-hockey/command") and request.method=="POST":
+        return jsonify(ok=False,error="自動動作中です。停止してから操作してください"),409
+    return None
 
 
 @app.route("/")
@@ -618,6 +459,8 @@ def field_hockey_feed():
 def api_field_hockey_status():
     status = field_hockey.get_status()
     status["automation"] = field_hockey_auto.get_status()
+    if status["automation"]["running"] and status["automation"].get("frozen_route"):
+        status["route"]=status["automation"]["frozen_route"]
     return jsonify(status)
 
 
@@ -626,7 +469,9 @@ def api_field_hockey_auto():
     data = request.get_json(silent=True) or {}
     action = data.get("action", "")
     if action == "start":
-        ok, message = field_hockey_auto.start()
+        ok, message = field_hockey_auto.start(
+            hit_enabled=data.get("hit_enabled") is True,
+            stroke_seconds=data.get("stroke_seconds"))
         return jsonify(ok=ok, message=message), (200 if ok else 409)
     if action == "stop":
         field_hockey_auto.stop()
@@ -791,8 +636,8 @@ def api_shutdown():
         # ESP32を安全側へ
         try:
             link.send_many([
-                "zj 0 0",
                 "zh",
+                "zV 0",
                 "zu0"
             ])
         except Exception:
@@ -840,6 +685,7 @@ def api_status():
 
 @atexit.register
 def cleanup():
+    field_hockey_auto.stop("アプリ終了")
     link.shutdown()
     camera.stop()
 
