@@ -24,6 +24,7 @@ from flask import Flask, Response, jsonify, render_template, request
 from hsbr.camera_manager import CameraManager
 from hsbr.field_hockey import FieldHockeyDetector
 from hsbr.field_hockey_motion import FieldHockeyAutoController
+from hsbr.field_hockey_vision import FieldHockeyVisionWorker
 import cv2
 import serial
 import subprocess
@@ -362,6 +363,15 @@ camera.start()
 
 field_hockey = FieldHockeyDetector()
 
+def encode_field_hockey_frame(frame):
+    ok,encoded=cv2.imencode('.jpg',frame,[int(cv2.IMWRITE_JPEG_QUALITY),75])
+    if not ok:
+        raise RuntimeError('検出画像をJPEGへ変換できません')
+    return encoded.tobytes()
+
+field_hockey_vision=FieldHockeyVisionWorker(camera,field_hockey,encode_field_hockey_frame)
+field_hockey_vision.start()
+
 link = ESP32Link(SERIAL_PORT, SERIAL_BAUD)
 field_hockey_auto = FieldHockeyAutoController(link, field_hockey)
 
@@ -427,29 +437,14 @@ def video_feed():
 
 
 def generate_field_hockey_mjpeg():
-    """Detection-only stream; no motion commands are sent here."""
+    # Viewers only read cached annotated frames. They never run detection.
+    previous=-1
     while True:
-        frame = camera.get_frame()
-        if frame is None:
-            time.sleep(0.05)
+        jpeg,ident=field_hockey_vision.get_jpeg(previous)
+        if jpeg is None or ident==previous:
             continue
-
-        annotated = field_hockey.process(frame)
-        ok, encoded = cv2.imencode(
-            ".jpg",
-            annotated,
-            [int(cv2.IMWRITE_JPEG_QUALITY), 75]
-        )
-        if ok:
-            yield (
-                b"--frame\r\n"
-                b"Content-Type: image/jpeg\r\n\r\n"
-                + encoded.tobytes()
-                + b"\r\n"
-            )
-
-        # Keep the initial detector load modest on Raspberry Pi 4.
-        time.sleep(0.1)
+        previous=ident
+        yield (b"--frame\r\nContent-Type: image/jpeg\r\n\r\n"+jpeg+b"\r\n")
 
 
 @app.route("/field_hockey_feed")
@@ -463,6 +458,7 @@ def field_hockey_feed():
 @app.route("/api/apps/field-hockey/status")
 def api_field_hockey_status():
     status = field_hockey.get_status()
+    status["vision_error"] = field_hockey_vision.last_error
     status["automation"] = field_hockey_auto.get_status()
     if status["automation"]["running"] and status["automation"].get("frozen_route"):
         status["route"]=status["automation"]["frozen_route"]
@@ -692,6 +688,7 @@ def api_status():
 def cleanup():
     field_hockey_auto.stop("アプリ終了")
     link.shutdown()
+    field_hockey_vision.stop()
     camera.stop()
 
 if __name__ == "__main__":

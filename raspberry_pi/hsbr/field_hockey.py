@@ -21,7 +21,7 @@ class FieldHockeyDetector(object):
     CAMERA_CY_PX = 240.0
     CAMERA_FY_PX = 779.0
     CAMERA_HEIGHT_MM = 170.0
-    CAMERA_DOWN_PITCH_DEG = 6.83
+    CAMERA_DOWN_PITCH_DEG = 8.89 #6.83
     BALL_CENTER_HEIGHT_MM = 60.0
     GOAL_HEIGHT_MM = 10.0
 
@@ -308,7 +308,9 @@ class FieldHockeyDetector(object):
             cv2.LINE_AA
         )
 
-    def process(self, frame):
+    def process(self, frame, observed_at=None):
+        if observed_at is None:
+            observed_at = time.monotonic()
         output = frame.copy()
         height, width = output.shape[:2]
         hsv = cv2.cvtColor(output, cv2.COLOR_BGR2HSV)
@@ -357,6 +359,7 @@ class FieldHockeyDetector(object):
             "ok": True,
             "mode": "detection",
             "processed_at": round(time.time(), 3),
+            "observed_at": float(observed_at),
             "frame_width": width,
             "frame_height": height,
             "red": red,

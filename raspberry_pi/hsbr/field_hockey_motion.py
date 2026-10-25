@@ -8,6 +8,7 @@ import os
 import subprocess
 import threading
 import time
+from hsbr.field_hockey_search import PoseTracker, GoalFrame, plan_from_world
 
 
 def finite(value):
@@ -49,7 +50,7 @@ class FieldHockeyAutoController(object):
         self.session_motion = False
         self.session_started = False
         self.max_seconds = 30.
-        self.speed = float(os.environ.get('HSBR_FH_SPEED', '30'))
+        self.speed = float(os.environ.get('HSBR_FH_SPEED', '40'))
         self.pivot_steer = float(os.environ.get('HSBR_FH_PIVOT_STEER', '20'))
         self.feedback_s = float(os.environ.get('HSBR_FH_FEEDBACK_MS', '10'))/1000.
         self.command_s = float(os.environ.get('HSBR_FH_COMMAND_MS', '10'))/1000.
@@ -59,6 +60,17 @@ class FieldHockeyAutoController(object):
         self.STICK_HIT = int(os.environ.get('HSBR_FH_STICK_HIT', '150'))
         self.STICK_NEUTRAL = int(os.environ.get('HSBR_FH_STICK_NEUTRAL', '90'))
         self.hit_enabled = False
+        self.pose = None
+        self.goal_frame = None
+        self.goal_world = None
+        self.ball_world = None
+        self.map_state = None
+        self.armed_at = None
+        self.search_steer = float(os.environ.get('HSBR_FH_SEARCH_STEER', '12'))
+        self.search_timeout = float(os.environ.get('HSBR_FH_SEARCH_SECONDS', '20'))
+        self.camera_lag_s = float(os.environ.get('HSBR_FH_CAMERA_LAG_MS', '100'))/1000.
+        self.search_settle_s = float(os.environ.get('HSBR_FH_SEARCH_SETTLE_MS', '120'))/1000.
+        self.raise_s = float(os.environ.get('HSBR_FH_RAISE_SECONDS', '0.5'))
         if monitor:
             thread = threading.Thread(target=self._monitor_loop, name='fh-voltage')
             thread.daemon = True
@@ -79,7 +91,8 @@ class FieldHockeyAutoController(object):
                         enable_control=t.get('enable_control'), continuous_flag=t.get('continuous_flag'),
                         hit_enabled=self.hit_enabled, frozen_route=self.frozen_route,
                         distance_mm=t.get('distance_mm'), angle_deg=t.get('angle_deg'),
-                        stroke_seconds=self.stroke_s)
+                        stroke_seconds=self.stroke_s, map_state=self.map_state,
+                        speed_input=self.speed)
 
     def start(self, hit_enabled=False, stroke_seconds=None):
         if stroke_seconds is not None:
@@ -94,11 +107,14 @@ class FieldHockeyAutoController(object):
                     return False,'すでに動作中です'
                 self.stroke_s=candidate
         parameters = (self.speed, self.pivot_steer, self.feedback_s, self.command_s,
-                      self.stroke_s, self.end_lead_deg)
+                      self.stroke_s, self.end_lead_deg, self.search_steer,
+                      self.search_timeout, self.camera_lag_s, self.search_settle_s, self.raise_s)
         if (not all(finite(v) for v in parameters) or not 15 <= self.speed <= 60 or
                 not 1 <= self.pivot_steer <= 60 or not 0 <= self.feedback_s <= .1 or
                 not 0 <= self.command_s <= .1 or not .02 <= self.stroke_s <= 1 or
-                not 0 <= self.end_lead_deg <= 10 or
+                not 0 <= self.end_lead_deg <= 10 or not 1 <= self.search_steer <= 30 or
+                not 5 <= self.search_timeout <= 60 or not 0 <= self.camera_lag_s <= .5 or
+                not 0 <= self.search_settle_s <= .5 or not 0 <= self.raise_s <= 2 or
                 any(not 0 <= v <= 180 for v in (self.STICK_BACK,self.STICK_HIT,self.STICK_NEUTRAL))):
             return False, '走行／打撃設定が範囲外です'
         with self.lock:
@@ -108,6 +124,7 @@ class FieldHockeyAutoController(object):
             self.running = True
             self.hit_enabled = bool(hit_enabled)
             self.frozen_route = None
+            self.map_state = None
             self.state, self.message = 'starting', '単発動作を開始します'
         worker = threading.Thread(target=self._run_once, name='field-hockey-auto')
         worker.daemon = True
@@ -163,6 +180,8 @@ class FieldHockeyAutoController(object):
             if now-self.last_heartbeat >= .1:
                 self._send('zK')
                 self.last_heartbeat = now
+        if self.pose is not None:
+            self.pose.update(t)
         return t
 
     def _wait(self, seconds, telemetry=False):
@@ -194,78 +213,110 @@ class FieldHockeyAutoController(object):
                 raise Cancelled('停止しました')
         raise RuntimeError('走行指令のACKが250ms以内に返りません')
 
-    def _standing(self):
-        self._set_state('stand_check','起立状態を確認しています')
-        self._send('zV 0')
-        self._send('zd0')
-        self._wait(.2)
-        t=self._check()
-        if t.get('enable_control') != 1:
-            self._send('zu1')
-        until=self.clock()+12
-        stable=None
-        while self.clock()<until:
-            self._send('zd0')
-            self._wait(.15)
-            t=self._check()
-            if t.get('enable_control') == 1 and self.clock()-t.get('status_at',0)<.5:
-                stable=stable or self.clock()
-                if self.clock()-stable>=1.:
-                    return
-            else:
-                stable=None
-        raise RuntimeError('起立を確認できません')
+    @staticmethod
+    def _valid_target(target):
+        return (target.get('found') and
+                finite(target.get('robot_x_mm')) and finite(target.get('robot_y_mm')))
+
+    def _acquire_target(self, key, label):
+        self._set_state('search_goal' if key=='green' else 'search_ball', label+'を探しています')
+        deadline=self.clock()+self.search_timeout
+        initial_wait=self.clock()+.15
+        scan_origin=self.pose.heading
+        scanning=False
+        refining=False
+        refine_after=0.
+        last_stamp=None
+        last_fresh=self.clock()
+        while self.clock()<deadline:
+            self._tick()
+            now=self.clock()
+            status=self.detector.get_status()
+            observed=status.get('observed_at',0.)
+            target=status.get(key) or {}
+            fresh=(finite(observed) and observed>0 and 0<=now-observed<.3)
+            valid=fresh and self._valid_target(target)
+            new=fresh and observed!=last_stamp
+            if new:
+                last_stamp=observed
+                last_fresh=now
+            if now-last_fresh>.6:
+                raise RuntimeError('新しいカメラ画像が600ms以上届いていません')
+            if refining:
+                # A moving detection triggers a stop, then a fresh measurement
+                # after the image pipeline and measured yaw have settled.
+                if (new and valid and observed>=refine_after and
+                        abs(self.pose.angular_speed)<=5.):
+                    return self.pose.target_world(target,observed-self.camera_lag_s)
+                if now>=refine_after+.6:
+                    refining=False
+            elif scanning:
+                if new and valid:
+                    self._motion(0,0)
+                    scanning=False
+                    refining=True
+                    refine_after=self.clock()+self.camera_lag_s+self.search_settle_s
+                    self._set_state('measure_goal' if key=='green' else 'measure_ball',
+                                    label+'を検出。新しい画像で座標を確定します')
+            elif valid:
+                return self.pose.target_world(target,observed-self.camera_lag_s)
+            elif (new or now>=initial_wait):
+                self._motion(0,-self.search_steer) # leftward scan: increasing theta
+                scanning=True
+                self._set_state('search_goal' if key=='green' else 'search_ball',
+                                label+'を旋回して探索しています')
+            if abs(math.degrees(self.pose.heading-scan_origin))>=390:
+                raise RuntimeError(label+'を一周探索しても測距できませんでした')
+            self._wait(.005,telemetry=True)
+        raise RuntimeError(label+'の探索が時間内に完了しませんでした')
 
     def _capture_route(self):
-        self._set_state('searching','ゴール・ボールを測定し、軌道を確定します')
-        until=self.clock()+8
-        last_stamp=None
-        samples=[]
-        while self.clock()<until:
-            self._check()
-            status=self.detector.get_status()
-            stamp=status.get('processed_at',0)
-            route=status.get('route') or {}
-            if (stamp != last_stamp and abs(time.time()-stamp)<1. and route.get('available')):
-                last_stamp=stamp
-                if samples and (abs(route['hit_x_mm']-samples[0]['hit_x_mm'])>40 or
-                                abs(route['hit_y_mm']-samples[0]['hit_y_mm'])>40 or
-                                abs(route['first_turn_deg']-samples[0]['first_turn_deg'])>5 or
-                                abs(route['arc_deg']-samples[0]['arc_deg'])>5):
-                    samples=[]
-                samples.append(dict(route))
-                if len(samples)>=5:
-                    keys=('first_turn_deg','straight_mm','orbit_radius_mm','arc_deg',
-                          'hit_heading_deg','hit_x_mm','hit_y_mm')
-                    if any(not finite(route.get(k)) for k in keys):
-                        raise RuntimeError('軌道に不正な数値があります')
-                    if (not 60 <= route['orbit_radius_mm'] <= 5000 or
-                            not 0 <= route['straight_mm'] <= 5000 or
-                            not .1 <= abs(route['arc_deg']) <= 270):
-                        raise RuntimeError('軌道が実行範囲外です（円弧0.1～270度、直進5m以内）')
-                    self.frozen_route=dict(route)
-                    return self.frozen_route
-            self._wait(.03)
-        raise RuntimeError('新しい安定した軌道を取得できません。検出画面を開いて確認してください')
+        self.goal_world=self._acquire_target('green','ゴール')
+        self.goal_frame=GoalFrame(self.goal_world)
+        self.map_state=self.goal_frame.describe(self.pose)
+        self.link._log_record('FH_MAP','goal='+repr(self.map_state))
+        self.ball_world=self._acquire_target('red','ボール')
+        self.map_state=self.goal_frame.describe(self.pose,self.ball_world)
+        self.link._log_record('FH_MAP','ball='+repr(self.map_state))
+        self._set_state('planning','ゴール基準座標から軌道を計算しています')
+        began=self.clock()
+        route=plan_from_world(self.detector,self.pose,self.goal_world,self.ball_world)
+        keys=('first_turn_deg','straight_mm','orbit_radius_mm','arc_deg',
+              'hit_heading_deg','hit_x_mm','hit_y_mm')
+        if any(not finite(route.get(k)) for k in keys):
+            raise RuntimeError('軌道に不正な数値があります')
+        if (not 60 <= route['orbit_radius_mm'] <= 5000 or
+                not 0 <= route['straight_mm'] <= 5000 or
+                not .1 <= abs(route['arc_deg']) <= 270):
+            raise RuntimeError('軌道が実行範囲外です（円弧0.1～270度、直進5m以内）')
+        route['goal_frame']=dict(self.map_state)
+        self.frozen_route=route
+        self.link._log_record('FH_PLAN','seconds={:.6f} route={}'.format(
+            self.clock()-began,route['command']))
+        return route
 
     def _begin_remote(self):
+        # No stand-up command, standing wait or pose-stability wait on start.
+        # Reuse capabilities only within the same serial connection generation.
         self._send('ze0')
-        before=self.clock()
-        self._send('zP')
-        while self.clock()-before<1.:
-            self._check()
-            if self.link.get_telemetry().get('radius_cap_at',0)>=before:
-                break
-            self._wait(.01)
-        else:
-            raise RuntimeError('半径指定ファームウェア未確認。ESP32へ今回の2ファイルを書き込んでください')
+        if not self.link.get_telemetry().get('radius_cap_at'):
+            before=self.clock()
+            self._send('zP')
+            while self.clock()-before<1.:
+                t=self._check()
+                if t.get('radius_cap_at',0)>=before:
+                    break
+                self._wait(.005)
+            else:
+                raise RuntimeError('半径指定ファームウェアを確認できません')
         before=self.clock()
         self._send('zV 20')
         self.session_started=True
         while self.clock()-before<1.:
             t=self._check()
             if t.get('od_at',0)>=before:
-                self._tick(motion=False)
+                t=self._tick(motion=False)
+                self.pose=PoseTracker(t)
                 return
             self._wait(.005)
         raise RuntimeError('OD距離情報を受信できません')
@@ -287,9 +338,7 @@ class FieldHockeyAutoController(object):
         raise RuntimeError('初期旋回が時間内に終わりません')
 
     def _execute(self, route):
-        if self.hit_enabled:
-            self._send('zss {}'.format(self.STICK_BACK))
-            self._wait(.5,telemetry=True)
+        # The stick has been raising in parallel with acquisition/pivot.
         deadline=self.clock()+self.max_seconds
         self._pivot(route['first_turn_deg'])
         self._set_state('straight','接点まで直進しています')
@@ -300,6 +349,8 @@ class FieldHockeyAutoController(object):
         def fire(t, eta, remaining_deg=None):
             nonlocal fired
             if self.hit_enabled:
+                if self.armed_at is None or self.clock()-self.armed_at<self.raise_s:
+                    raise RuntimeError('振り上げ準備時間が不足しています。ボールから距離を取って再実行してください')
                 self._send('zss {}'.format(self.STICK_HIT))
             fired=True
             self.link._log_record('FH_HIT','enabled={} eta={:.3f} remaining_deg={} d={}'.format(
@@ -366,16 +417,29 @@ class FieldHockeyAutoController(object):
             self.latest_ack=None
             self.session_started=False
             self.session_motion=False
-            self._standing()
-            self._send('zd1')
-            self._wait(.3)
-            voltage=self.link.get_telemetry().get('battery_voltage')
-            if not finite(voltage):
-                raise RuntimeError('バッテリ電圧を取得できません')
-            if voltage<=self.CRITICAL_VOLTAGE:
+            self.pose=None
+            self.goal_frame=None
+            self.goal_world=self.ball_world=None
+            self.armed_at=None
+            self._begin_remote()
+            if self.hit_enabled:
+                self._send('zss {}'.format(self.STICK_BACK))
+                self.armed_at=self.clock()
+            # Usually the background voltage monitor already has a fresh value.
+            t=self.link.get_telemetry()
+            if not finite(t.get('battery_voltage')) or self.clock()-t.get('data_at',0)>2:
+                self._send('zd1')
+                until=self.clock()+.2
+                while self.clock()<until:
+                    t=self.link.get_telemetry()
+                    if finite(t.get('battery_voltage')) and self.clock()-t.get('data_at',0)<2:
+                        break
+                    self._wait(.005,telemetry=True)
+            if not finite(t.get('battery_voltage')) or self.clock()-t.get('data_at',0)>2:
+                raise RuntimeError('新しいバッテリ電圧を取得できません')
+            if t['battery_voltage']<=self.CRITICAL_VOLTAGE:
                 raise RuntimeError('10.5V以下です。走行を開始しません')
             route=self._capture_route()
-            self._begin_remote()
             self._execute(route)
         except Cancelled:
             self._set_state('stopped','停止しました')

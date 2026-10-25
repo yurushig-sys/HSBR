@@ -779,7 +779,8 @@
       </div>
       <div class="hint">
         距離・座標は暫定校正値です（X＝正面、Y＝左がプラス）。
-        「自動1回実行」を押すまで移動・旋回・打撃命令は送りません。
+        起立済みで「自動1回実行」を押すと確認画面なしで開始します。
+        ゴール→ボールの順に検出し、見えない対象は旋回して探索します。
         初期旋回後は停止せず、直進から円弧へつなぎます。打撃後の駆動直進はありません。
       </div>
     </div>
@@ -923,22 +924,20 @@ function formatAutomationStatus(automation) {
   if (automation.last_command) {
     text += "\n実行コマンド：" + automation.last_command;
   }
+  const map = automation.map_state;
+  if (map) {
+    text += "\nゴール基準座標（開始位置が原点・Yは左＋）" +
+      "\nゴール：(" + Number(map.goal_x_mm).toFixed(0) + ", 0) mm";
+    if (map.ball_x_mm !== undefined) {
+      text += "\nボール：(" + Number(map.ball_x_mm).toFixed(0) + ", " +
+        Number(map.ball_y_mm).toFixed(0) + ") mm";
+    }
+  }
   return text;
 }
 
 
 async function fieldHockeyAutoAction(actionName) {
-  if (actionName === "start") {
-    const ok = window.confirm(
-      "初期旋回→直進→円弧回り込み→終点で停止指令。\n" +
-      (document.getElementById("fieldHockeyHitEnabled").checked ? "打撃あり\n\n" : "走行のみ（打撃なし）\n\n") +
-      "周囲とバッテリ状態を確認しましたか？"
-    );
-    if (!ok) {
-      return;
-    }
-  }
-
   if (actionName === "start") {
     desiredSpeed = desiredSteer = 0;
     speedJoystick.center(); steerJoystick.center(); updateValueDisplay();
