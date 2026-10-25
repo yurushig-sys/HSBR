@@ -24,6 +24,10 @@ class Cancelled(RuntimeError):
     pass
 
 
+class Fallen(RuntimeError):
+    pass
+
+
 class FieldHockeyAutoController(object):
     WARNING_VOLTAGE = 11.0
     CRITICAL_VOLTAGE = 10.5
@@ -59,6 +63,12 @@ class FieldHockeyAutoController(object):
         self.STICK_BACK = int(os.environ.get('HSBR_FH_STICK_BACK', '50'))
         self.STICK_HIT = int(os.environ.get('HSBR_FH_STICK_HIT', '150'))
         self.STICK_NEUTRAL = int(os.environ.get('HSBR_FH_STICK_NEUTRAL', '90'))
+        self.return_delay_s = float(os.environ.get('HSBR_FH_RETURN_DELAY_SECONDS', '1.5'))
+        self.return_speed = float(os.environ.get('HSBR_FH_RETURN_SPEED', '20'))
+        self.return_steer = float(os.environ.get('HSBR_FH_RETURN_STEER', '12'))
+        self.return_tolerance_mm = 50.
+        self.position_valid = False
+        self.recovery_active = False
         self.hit_enabled = False
         self.pose = None
         self.goal_frame = None
@@ -92,7 +102,8 @@ class FieldHockeyAutoController(object):
                         hit_enabled=self.hit_enabled, frozen_route=self.frozen_route,
                         distance_mm=t.get('distance_mm'), angle_deg=t.get('angle_deg'),
                         stroke_seconds=self.stroke_s, map_state=self.map_state,
-                        speed_input=self.speed)
+                        speed_input=self.speed, position_valid=self.position_valid,
+                        return_delay_seconds=self.return_delay_s)
 
     def start(self, hit_enabled=False, stroke_seconds=None):
         if stroke_seconds is not None:
@@ -108,13 +119,16 @@ class FieldHockeyAutoController(object):
                 self.stroke_s=candidate
         parameters = (self.speed, self.pivot_steer, self.feedback_s, self.command_s,
                       self.stroke_s, self.end_lead_deg, self.search_steer,
-                      self.search_timeout, self.camera_lag_s, self.search_settle_s, self.raise_s)
+                      self.search_timeout, self.camera_lag_s, self.search_settle_s, self.raise_s,
+                      self.return_delay_s, self.return_speed, self.return_steer)
         if (not all(finite(v) for v in parameters) or not 15 <= self.speed <= 60 or
                 not 1 <= self.pivot_steer <= 60 or not 0 <= self.feedback_s <= .1 or
                 not 0 <= self.command_s <= .1 or not .02 <= self.stroke_s <= 1 or
                 not 0 <= self.end_lead_deg <= 10 or not 1 <= self.search_steer <= 30 or
                 not 5 <= self.search_timeout <= 60 or not 0 <= self.camera_lag_s <= .5 or
                 not 0 <= self.search_settle_s <= .5 or not 0 <= self.raise_s <= 2 or
+                not 1 <= self.return_delay_s <= 2 or not 5 <= self.return_speed <= 30 or
+                not 1 <= self.return_steer <= 20 or
                 any(not 0 <= v <= 180 for v in (self.STICK_BACK,self.STICK_HIT,self.STICK_NEUTRAL))):
             return False, '走行／打撃設定が範囲外です'
         with self.lock:
@@ -150,6 +164,10 @@ class FieldHockeyAutoController(object):
         with self.command_lock:
             try:
                 self.link.send('zh')
+                if self.recovery_active:
+                    self.link.send('zV 0')
+                    self.link.send('zu0')
+                    self.recovery_active=False
             except Exception:
                 pass
             self.session_motion = False
@@ -160,6 +178,7 @@ class FieldHockeyAutoController(object):
             raise Cancelled('停止しました')
         t = self.link.get_telemetry()
         if self.session_generation is not None and t.get('generation') != self.session_generation:
+            self.position_valid=False
             raise RuntimeError('ESP32接続が変わりました。再開せず停止します')
         return t
 
@@ -167,10 +186,15 @@ class FieldHockeyAutoController(object):
         t = self._check()
         now = self.clock()
         if not t.get('od_at') or now-t['od_at'] > .2:
+            self.position_valid=False
             raise RuntimeError('距離情報が200ms以上途絶えました')
         if t.get('enable_control') != 1:
-            raise RuntimeError('倒立制御が解除されました')
+            self.position_valid=False
+            if self.pose is not None:
+                raise Fallen('走行中に転倒しました')
+            raise RuntimeError('起立していません。起立してから開始してください')
         if any(not finite(t.get(k)) for k in ('distance_mm','velocity_mm_s','angle_deg')):
+            self.position_valid=False
             raise RuntimeError('距離・速度・角度が不正です')
         if motion and self.session_motion:
             if self.latest_ack is not None:
@@ -196,6 +220,7 @@ class FieldHockeyAutoController(object):
         sent=self.clock()
         command=('zR {} {:.2f} {:.2f}'.format(ident,speed,steer) if radius is None else
                  'zC {} {:.2f} {:.2f}'.format(ident,speed,radius))
+        self.latest_ack=None # prior command may have been intentionally halted
         self._send(command)
         self.session_motion=True
         self.last_heartbeat=sent
@@ -317,6 +342,7 @@ class FieldHockeyAutoController(object):
             if t.get('od_at',0)>=before:
                 t=self._tick(motion=False)
                 self.pose=PoseTracker(t)
+                self.position_valid=True
                 return
             self._wait(.005)
         raise RuntimeError('OD距離情報を受信できません')
@@ -406,10 +432,132 @@ class FieldHockeyAutoController(object):
                 break
             self._wait(.005,telemetry=True)
         self._set_state('coasting','円弧終点で停止指令。惰性走行中です')
-        self._wait(max(.6, self.stroke_s+.2),telemetry=True)
+        self._wait(self.return_delay_s,telemetry=True)
         if self.hit_enabled:
             self._send('zss {}'.format(self.STICK_NEUTRAL))
-        self._set_state('completed','単発ヒット完了' if self.hit_enabled else '打撃なしの軌道確認完了')
+        self._return_home()
+        self._set_state('completed','開始位置へ帰還しました（車輪距離による推定）')
+
+    @staticmethod
+    def _angle_error(target, actual):
+        return (target-actual+math.pi) % (2*math.pi)-math.pi
+
+    def _update_map(self):
+        if self.goal_frame is not None and self.pose is not None:
+            self.map_state=self.goal_frame.describe(self.pose,self.ball_world)
+
+    def _settle(self, minimum=.3):
+        """Track coasting as well as powered motion; never assume zh stops at once."""
+        began=self.clock()
+        stable=None
+        while self.clock()-began<3.:
+            t=self._tick(motion=False)
+            self._update_map()
+            if abs(t['velocity_mm_s'])<30 and abs(self.pose.angular_speed)<5:
+                if stable is None:stable=self.clock()
+                if self.clock()-began>=minimum and self.clock()-stable>=.25:return
+            else:stable=None
+            self._wait(.005,telemetry=True)
+        raise RuntimeError('惰性走行が収まりません。帰還を停止します')
+
+    def _turn_home(self, heading):
+        # Shortest in-place turn, at lower steering input than the hitting run.
+        # A second pass corrects residual rotation after releasing steering.
+        for attempt in range(2):
+            error=self._angle_error(heading,self.pose.heading)
+            if abs(math.degrees(error))<=3:return
+            sign=1 if error>0 else -1
+            self._motion(0,-sign*self.return_steer)
+            until=self.clock()+15.
+            while True:
+                self._tick()
+                error=self._angle_error(heading,self.pose.heading)
+                lead=math.radians(abs(self.pose.angular_speed))*(self.feedback_s+self.command_s+.02)
+                if sign*error<=max(math.radians(1),lead):break
+                if self.clock()>until:raise RuntimeError('帰還旋回が時間内に終わりません')
+                self._wait(.005,telemetry=True)
+            self._halt()
+            self._settle()
+        if abs(math.degrees(self._angle_error(heading,self.pose.heading)))>5:
+            raise RuntimeError('帰還方向を合わせられません。その場で待機します')
+
+    def _return_home(self):
+        if not self.position_valid:
+            raise RuntimeError('開始位置の座標を信頼できません。その場で待機します')
+        self._set_state('returning','低速で開始位置へ戻ります')
+        self._settle()
+        began=self.clock()
+        for attempt in range(3):
+            self._tick()
+            remaining=math.hypot(self.pose.x,self.pose.y)
+            if remaining<=self.return_tolerance_mm:break
+            self._turn_home(math.atan2(-self.pose.y,-self.pose.x))
+            # In-place balance can translate the body: recompute the distance.
+            remaining=math.hypot(self.pose.x,self.pose.y)
+            if remaining<=self.return_tolerance_mm:break
+            start=self._motion(self.return_speed)
+            target=start['distance_mm']+remaining
+            while True:
+                t=self._tick()
+                self._update_map()
+                if projected_distance(t,self.clock(),self.feedback_s,self.command_s)>=target:break
+                if self.clock()-began>60:
+                    raise RuntimeError('帰還が時間内に終わりません。その場で待機します')
+                self._wait(.005,telemetry=True)
+            self._halt()
+            self._settle(.8)
+        if math.hypot(self.pose.x,self.pose.y)>self.return_tolerance_mm:
+            raise RuntimeError('開始位置へ収束しません。その場で待機します')
+        self._set_state('return_heading','開始時の向きに戻しています')
+        self._turn_home(0.)
+        self._update_map()
+        error=math.hypot(self.pose.x,self.pose.y)
+        self.link._log_record('FH_HOME','estimated_error_mm={:.1f}'.format(error))
+        if error>self.return_tolerance_mm:
+            raise RuntimeError('方向合わせ後に開始位置からずれました。その場で待機します')
+
+    def _recover_fall(self):
+        # ESP32 odometry_init() runs on both fall and re-enable. Wheel motion
+        # while horizontal also is not ground travel. Position is untrustworthy.
+        self.position_valid=False
+        self.map_state=None
+        self.pose=None
+        self.latest_ack=None
+        self._halt()
+        self._set_state('fallen','転倒を検出。座標を無効にし、自動起立を準備します')
+        self._wait(1.) # allow the body to finish falling; STOP remains active
+        self._send('zV 0') # firmware rejects legacy zu1 inside a remote session
+        self.session_started=False
+        self._send('zss {}'.format(self.STICK_NEUTRAL))
+        self.recovery_active=True
+        self._send('zu1') # one attempt only; do not resume the interrupted hit
+        self._send('zV 20') # retain serial ownership/OD while ESP32 stands itself
+        self.session_started=True
+        self._set_state('recovering','自動起立中。起立後はその場で待機します')
+        began=self.clock()
+        stable=None
+        while self.clock()-began<8.:
+            t=self._check()
+            now=self.clock()
+            if not t.get('od_at') or now-t['od_at']>.2:
+                raise RuntimeError('起立中に距離情報が途絶えました。その場で待機します')
+            if (not finite(t.get('battery_voltage')) or now-t.get('data_at',0)>2 or
+                    t['battery_voltage']<=self.CRITICAL_VOLTAGE):
+                raise RuntimeError('起立中の電圧が不足または不明です')
+            if t.get('enable_control')==1:
+                if stable is None:stable=now
+                # ESP32 stand_up takes >2 seconds; an early transient upright
+                # sample must not finish recovery or permit any driving.
+                if now-began>=3 and now-stable>=1:
+                    self._halt()
+                    self.recovery_active=False
+                    self._set_state('waiting','起立しました。転倒で座標が無効のため、その場で待機します')
+                    return
+            else:stable=None
+            self._wait(.01)
+        # Abort the stand-up state machine before reporting failure. zu0 requests
+        # a controlled stand-down; it never starts another stand-up attempt.
+        raise RuntimeError('自動起立を確認できませんでした。その場で待機します')
 
     def _run_once(self):
         try:
@@ -418,6 +566,7 @@ class FieldHockeyAutoController(object):
             self.session_started=False
             self.session_motion=False
             self.pose=None
+            self.position_valid=False
             self.goal_frame=None
             self.goal_world=self.ball_world=None
             self.armed_at=None
@@ -441,12 +590,26 @@ class FieldHockeyAutoController(object):
                 raise RuntimeError('10.5V以下です。走行を開始しません')
             route=self._capture_route()
             self._execute(route)
+        except Fallen:
+            try:
+                self._recover_fall()
+            except Cancelled:
+                self._set_state('stopped','停止しました')
+            except Exception as exc:
+                self._set_state('error',str(exc))
         except Cancelled:
             self._set_state('stopped','停止しました')
         except Exception as exc:
             self._set_state('error',str(exc))
         finally:
             with self.command_lock:
+                if self.recovery_active:
+                    # Cancel an incomplete stand-up even on STOP, telemetry loss
+                    # or a voltage error. Never leave its servo routine running.
+                    for command in ('zV 0','zu0'):
+                        try:self.link.send(command)
+                        except Exception:pass
+                    self.recovery_active=False
                 for command in ('zh','zV 0'):
                     try:
                         self.link.send(command)

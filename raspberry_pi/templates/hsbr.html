@@ -781,7 +781,8 @@
         距離・座標は暫定校正値です（X＝正面、Y＝左がプラス）。
         起立済みで「自動1回実行」を押すと確認画面なしで開始します。
         ゴール→ボールの順に検出し、見えない対象は旋回して探索します。
-        初期旋回後は停止せず、直進から円弧へつなぎます。打撃後の駆動直進はありません。
+        初期旋回後は停止せず、直進から円弧へつなぎます。打撃後は1.5秒待ち、低速で開始位置・開始時の向きへ戻ります。
+        転倒時は自動起立を一度試み、座標を無効にしてその場で待機します。
       </div>
     </div>
   </section>
@@ -902,6 +903,7 @@ function formatRouteStatus(route) {
       Number(route.hit_y_mm).toFixed(0) +
       " mm  方向=" + Number(route.hit_heading_deg).toFixed(1) + "°" +
     "\n4. 円弧終点で打撃・停止指令（その後は惰性走行）" +
+    "\n5. 1.5秒後、低速で開始位置へ帰還" +
     "\n軌道表現：" + route.command;
 }
 
@@ -924,6 +926,9 @@ function formatAutomationStatus(automation) {
   if (automation.last_command) {
     text += "\n実行コマンド：" + automation.last_command;
   }
+  if (automation.position_valid === false) {
+    text += "\n座標：未確定または無効（自動帰還不可）";
+  }
   const map = automation.map_state;
   if (map) {
     text += "\nゴール基準座標（開始位置が原点・Yは左＋）" +
@@ -932,6 +937,10 @@ function formatAutomationStatus(automation) {
       text += "\nボール：(" + Number(map.ball_x_mm).toFixed(0) + ", " +
         Number(map.ball_y_mm).toFixed(0) + ") mm";
     }
+  }
+  if (map && map.robot_x_mm !== undefined) {
+    text += "\n自機：(" + Number(map.robot_x_mm).toFixed(0) + ", " +
+      Number(map.robot_y_mm).toFixed(0) + ") mm";
   }
   return text;
 }

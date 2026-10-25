@@ -21,7 +21,7 @@ class FieldHockeyDetector(object):
     CAMERA_CY_PX = 240.0
     CAMERA_FY_PX = 779.0
     CAMERA_HEIGHT_MM = 170.0
-    CAMERA_DOWN_PITCH_DEG = 8.89 #6.83
+    CAMERA_DOWN_PITCH_DEG = 6.83
     BALL_CENTER_HEIGHT_MM = 60.0
     GOAL_HEIGHT_MM = 10.0
 
